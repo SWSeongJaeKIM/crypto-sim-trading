@@ -111,6 +111,27 @@ PAGE = """
   .role-body { white-space:pre-wrap; font-size:13px; color:#d1d5db; margin-top:10px; padding-top:10px; border-top:1px solid #2a2d35; display:none; }
   .role-body.open { display:block; }
   .synth-card { border:1px solid #2563eb; }
+
+  /* 사무실 애니메이션 (AI 분석팀 탭) */
+  @keyframes typeBob { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-2px)} }
+  @keyframes armType { 0%,100%{transform:rotate(0deg)} 50%{transform:rotate(-8deg)} }
+  @keyframes blinkEye { 0%,90%,100%{opacity:1} 95%{opacity:0.1} }
+  @keyframes steamRise { 0%{transform:translateY(0) scaleX(1); opacity:0.7} 100%{transform:translateY(-10px) scaleX(1.4); opacity:0} }
+  @keyframes deskGlow { 0%,100%{opacity:0.5} 50%{opacity:1} }
+  @keyframes badgeBounce { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-4px)} }
+  .office-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:20px; }
+  .desk-card { background:#1a1d24; border-radius:12px; padding:12px 8px 10px; text-align:center; position:relative; overflow:hidden; }
+  .desk-card.done { background:#113524; }
+  .desk-char { width:60px; height:64px; margin:0 auto 4px; }
+  .desk-char .arm-anim { animation:armType 0.5s ease-in-out infinite; }
+  .desk-char .head-anim { animation:typeBob 1.1s ease-in-out infinite; }
+  .desk-char .eye-anim { animation:blinkEye 3.4s infinite; }
+  .desk-steam { animation:steamRise 1.6s ease-out infinite; }
+  .desk-role-name { font-size:12px; font-weight:500; color:#e6e6e6; margin:0; }
+  .desk-role-state { font-size:11px; color:#9aa0a6; margin:2px 0 0; }
+  .desk-role-state.done { color:#4ade80; }
+  .desk-badge-done { position:absolute; top:6px; right:6px; width:16px; height:16px; border-radius:50%; background:#22c55e; display:flex; align-items:center; justify-content:center; animation:badgeBounce 1s ease-in-out infinite; font-size:11px; color:#06281a; }
+  .desk-lamp { position:absolute; top:4px; left:6px; width:6px; height:6px; border-radius:50%; background:#fbbf24; animation:deskGlow 1.3s ease-in-out infinite; }
 </style>
 </head>
 <body>
@@ -143,6 +164,7 @@ PAGE = """
 
   <div class="tab-page" id="tab-analysis">
     <div class="sub" id="analysis-status">불러오는 중...</div>
+    <div class="office-grid" id="office-grid"></div>
     <div id="analysis-synth"></div>
     <h3>역할별 분석 리포트</h3>
     <div id="analysis-roles"></div>
@@ -161,8 +183,52 @@ function toggleRoleBody(id) {
   document.getElementById(id).classList.toggle('open');
 }
 
-const ROLE_ORDER = ['strategy', 'lstm', 'execution', 'storage', 'risk'];
-const ROLE_ICONS = {strategy:'📐', lstm:'🧠', execution:'⚙️', storage:'🗄️', risk:'⚠️'};
+const ROLE_ORDER = ['strategy', 'lstm', 'execution', 'storage', 'risk', 'synthesizer'];
+const ROLE_ICONS = {strategy:'📐', lstm:'🧠', execution:'⚙️', storage:'🗄️', risk:'⚠️', synthesizer:'🏆'};
+const ROLE_LABELS_FALLBACK = {strategy:'전략 분석가', lstm:'LSTM 분석가', execution:'실행/버그 분석가',
+                                storage:'데이터 분석가', risk:'리스크 분석가', synthesizer:'종합 조정자'};
+
+function deskCharSvg(seed, working) {
+  const skin = ['#F4C9A0','#E8A66C','#C98B5E','#8D5A3C'][seed % 4];
+  const shirt = ['#7F77DD','#1D9E75','#D85A30','#378ADD','#BA7517','#D4537E'][seed % 6];
+  const typing = working ? `<rect x="24" y="44.5" width="12" height="2.6" rx="0.5" fill="#4ade80" opacity="0.8"/>` : '';
+  return `
+  <svg viewBox="0 0 60 64" width="60" height="64">
+    <ellipse cx="30" cy="58" rx="22" ry="4" fill="#2a2d35" opacity="0.4"/>
+    <g class="arm-anim" style="transform-origin:16px 44px">
+      <rect x="10" y="40" width="10" height="7" rx="3" fill="${shirt}"/>
+    </g>
+    <g class="arm-anim" style="transform-origin:44px 44px; animation-delay:0.25s">
+      <rect x="40" y="40" width="10" height="7" rx="3" fill="${shirt}"/>
+    </g>
+    <rect x="16" y="32" width="28" height="18" rx="8" fill="${shirt}"/>
+    <g class="head-anim">
+      <circle cx="30" cy="22" r="14" fill="${skin}"/>
+      <path d="M16 18 Q16 6 30 6 Q44 6 44 18 L44 15 Q30 10 16 15 Z" fill="#3b2a1a"/>
+      <circle class="eye-anim" cx="25" cy="22" r="1.6" fill="#2c2c2a"/>
+      <circle class="eye-anim" cx="35" cy="22" r="1.6" fill="#2c2c2a"/>
+      <path d="M26 28 Q30 30 34 28" stroke="#2c2c2a" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+    </g>
+    <rect x="8" y="48" width="44" height="6" rx="2" fill="#0f1115" stroke="#2a2d35" stroke-width="0.5"/>
+    <rect x="22" y="44" width="16" height="4" rx="1" fill="#1a1a1a"/>${typing}
+  </svg>`;
+}
+
+function renderOffice(roleStates) {
+  const grid = document.getElementById('office-grid');
+  grid.innerHTML = ROLE_ORDER.map((key, i) => {
+    const done = roleStates[key] === 'done';
+    const label = ROLE_LABELS_FALLBACK[key];
+    return `
+    <div class="desk-card ${done ? 'done' : ''}">
+      ${!done ? '<div class="desk-lamp"></div>' : '<div class="desk-badge-done">✓</div>'}
+      ${!done ? '<div style="position:absolute;top:10px;right:10px;width:4px;height:6px;background:#6b7280;border-radius:2px;opacity:0.5;" class="desk-steam"></div>' : ''}
+      <div class="desk-char">${deskCharSvg(i, !done)}</div>
+      <p class="desk-role-name">${ROLE_ICONS[key] || ''} ${label}</p>
+      <p class="desk-role-state ${done ? 'done' : ''}">${done ? '리포트 완료' : '코드 분석 중...'}</p>
+    </div>`;
+  }).join('');
+}
 
 async function loadAnalysis() {
   const statusEl = document.getElementById('analysis-status');
@@ -172,11 +238,22 @@ async function loadAnalysis() {
 
   if (!d.index) {
     statusEl.innerText = '아직 분석 리포트가 없습니다 (클라우드에서 1시간마다 자동 생성되며, 인터넷 연결이 필요합니다). 잠시 후 다시 확인해주세요.';
+    const allWorking = {};
+    ROLE_ORDER.forEach(k => allWorking[k] = 'working');
+    renderOffice(allWorking);
     document.getElementById('analysis-synth').innerHTML = '';
     document.getElementById('analysis-roles').innerHTML = '';
     return;
   }
   statusEl.innerText = `마지막 분석: ${d.index.generated_at || '-'} (UTC) · 1시간마다 자동 갱신`;
+
+  // GitHub에 이번 회차 리포트가 이미 올라온 역할은 "완료" 뱃지, 아직 없는
+  // 역할은 "분석 중" 캐릭터로 표시 — latest.json의 roles 키 존재 여부로 판정.
+  const roleStates = {};
+  ROLE_ORDER.forEach(key => {
+    roleStates[key] = d.index.roles?.[key] ? 'done' : 'working';
+  });
+  renderOffice(roleStates);
 
   const synthRole = d.index.roles?.synthesizer;
   const synthBody = d.reports?.synthesizer;
@@ -193,7 +270,7 @@ async function loadAnalysis() {
 
   const rolesEl = document.getElementById('analysis-roles');
   rolesEl.innerHTML = '';
-  for (const roleKey of ROLE_ORDER) {
+  for (const roleKey of ROLE_ORDER.filter(k => k !== 'synthesizer')) {
     const info = d.index.roles?.[roleKey];
     if (!info) continue;
     const body = d.reports?.[roleKey] || '(본문을 불러오지 못했습니다)';
