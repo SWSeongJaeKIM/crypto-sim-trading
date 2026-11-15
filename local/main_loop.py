@@ -36,13 +36,19 @@ import storage
 from portfolio import Portfolio, COINS, INITIAL_CAPITAL_KRW
 from strategies import ALL_STRATEGIES
 
-TRADE_FRACTION = 0.5          # 매수/매도 시 자금의 몇 %를 움직일지
+MIN_TRADE_FRACTION = 0.2      # 확신도가 낮을 때(0.0) 베팅 비율 — 그래도 조금은 움직임
+MAX_TRADE_FRACTION = 0.9      # 확신도가 높을 때(1.0) 베팅 비율
 CYCLE_INTERVAL_SEC = 60       # 매매 사이클 주기 (1분봉이므로 60초)
 RETRAIN_HOUR_LOCAL = 4        # 매일 이 시(0~23, 로컬 시간)에 LSTM 재학습
 HISTORY_DAYS_FOR_TRAIN = 30   # LSTM 학습에 쓸 최근 일수
 STRATEGY_NAMES = list(ALL_STRATEGIES.keys()) + ["lstm_predictor"]
 RESET_DAYS = 7                # "리셋" 포트폴리오를 며칠마다 1000만원으로 초기화할지
 PORTFOLIO_MODES = ["reset", "cumulative"]
+# 클라우드 6에이전트 분석팀(analysis_team/)이 GitHub Actions 스케줄로 매시간
+# 이 분(UTC)에 도는데, 이 PC 루프는 그 스케줄을 실행하지 않고 "다음 실행이
+# 몇 분 남았는지"만 콘솔에 보여주기 위해 참고한다(실제 실행 주기를 바꾸고
+# 싶으면 클라우드 스케줄 작업 설정에서 바꾸고 여기 숫자도 맞춰줘야 함).
+CLOUD_ANALYSIS_MINUTE_UTC = 17
 
 logging.basicConfig(
     level=logging.INFO,
@@ -103,6 +109,47 @@ def _reset_is_due(created_at_iso: str) -> bool:
     return datetime.now(timezone.utc) - created_at >= timedelta(days=RESET_DAYS)
 
 
+def _fmt_remaining(delta: timedelta) -> str:
+    total_sec = max(0, int(delta.total_seconds()))
+    h, rem = divmod(total_sec, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}시간 {m}분"
+    if m:
+        return f"{m}분 {s}초"
+    return f"{s}초"
+
+
+def time_until_next_retrain(last_retrain_date) -> timedelta:
+    """다음 LSTM 재학습(매일 RETRAIN_HOUR_LOCAL시, 로컬시간)까지 남은 시간.
+    last_retrain_date가 오늘이면 다음 재학습은 내일 이 시각."""
+    now_local = datetime.now()
+    target = now_local.replace(hour=RETRAIN_HOUR_LOCAL, minute=0, second=0, microsecond=0)
+    if target <= now_local or last_retrain_date == now_local.date():
+        target += timedelta(days=1)
+    return target - now_local
+
+
+def confidence_to_trade_fraction(confidence: float) -> float:
+    """확신도(0.0~1.0)를 실제 베팅 비율(MIN_TRADE_FRACTION~MAX_TRADE_FRACTION)로
+    변환. 확신도가 낮아도 0으로 만들지 않는 이유: 신호 자체(BUY/SELL)는 이미
+    "조건을 만족했다"는 판단이므로 최소한의 베팅은 하고, 확신도는 그 위에
+    강도를 더하는 역할만 한다."""
+    confidence = max(0.0, min(1.0, confidence))
+    return MIN_TRADE_FRACTION + (MAX_TRADE_FRACTION - MIN_TRADE_FRACTION) * confidence
+
+
+def time_until_next_cloud_analysis() -> timedelta:
+    """클라우드 6에이전트 분석팀의 다음 실행(매시간 CLOUD_ANALYSIS_MINUTE_UTC분,
+    UTC 기준)까지 남은 시간. 실제 실행은 클라우드에서 일어나고, 이 함수는
+    표시용으로 그 스케줄을 로컬에서 계산만 한다."""
+    now_utc = datetime.now(timezone.utc)
+    target = now_utc.replace(minute=CLOUD_ANALYSIS_MINUTE_UTC, second=0, microsecond=0)
+    if target <= now_utc:
+        target += timedelta(hours=1)
+    return target - now_utc
+
+
 def run_one_cycle(conn) -> None:
     now = datetime.now(timezone.utc).isoformat()
     set_progress(conn, "collecting", "최신 1분봉 수집 중...")
@@ -128,10 +175,13 @@ def run_one_cycle(conn) -> None:
             params = storage.get_params(conn, strat_name) or ALL_STRATEGIES[strat_name].default_params()
             strat = ALL_STRATEGIES[strat_name](**params)
 
-        # 신호(BUY/SELL/HOLD)는 전략당 1번만 계산하고, reset/cumulative 두
-        # 포트폴리오에 동일하게 적용한다 (매매 판단 로직은 같고, 계좌 상태만 분리).
+        # 신호(BUY/SELL/HOLD)와 확신도는 전략당 1번만 계산하고, reset/cumulative
+        # 두 포트폴리오에 동일하게 적용한다 (매매 판단 로직은 같고, 계좌
+        # 상태만 분리). 확신도(0~1)는 베팅 비율(MIN~MAX_TRADE_FRACTION)로
+        # 변환되어 "얼마나 베팅할지"를 결정한다 — 애매한 신호는 조금만,
+        # 뚜렷한 신호는 많이 움직인다.
         portfolios = {mode: load_or_new_portfolio(conn, strat_name, mode) for mode in PORTFOLIO_MODES}
-        signals: dict[str, str] = {}
+        signals: dict[str, tuple[str, float]] = {}  # coin -> (signal, confidence)
 
         for coin, df in candles.items():
             if coin not in prices_krw or df.empty:
@@ -140,8 +190,8 @@ def run_one_cycle(conn) -> None:
                 strat.coin = coin
             if len(df) < strat.min_bars():
                 continue
-            signal_ = strat.signal(df)
-            signals[coin] = signal_
+            signal_, confidence = strat.signal_with_confidence(df)
+            signals[coin] = (signal_, confidence)
             price = prices_krw[coin]
 
             if strat_name == "lstm_predictor":
@@ -150,14 +200,17 @@ def run_one_cycle(conn) -> None:
                     storage.add_prediction(conn, coin, now, prob_up, price)
 
         for mode, pf in portfolios.items():
-            for coin, signal_ in signals.items():
+            for coin, (signal_, confidence) in signals.items():
                 if coin not in pf.slots:
                     continue
                 price = prices_krw[coin]
+                fraction = confidence_to_trade_fraction(confidence)
                 if signal_ == "BUY":
-                    pf.buy(coin, price, pct_of_cash=TRADE_FRACTION, reason=f"{strat_name} BUY")
+                    pf.buy(coin, price, pct_of_cash=fraction,
+                           reason=f"{strat_name} BUY (확신도 {confidence:.2f} -> {fraction*100:.0f}%)")
                 elif signal_ == "SELL":
-                    pf.sell(coin, price, pct_of_qty=TRADE_FRACTION, reason=f"{strat_name} SELL")
+                    pf.sell(coin, price, pct_of_qty=fraction,
+                            reason=f"{strat_name} SELL (확신도 {confidence:.2f} -> {fraction*100:.0f}%)")
 
             key = portfolio_key(strat_name, mode)
             storage.set_portfolio(conn, key, pf.to_doc(), now)
@@ -238,6 +291,10 @@ def main():
                     last_retrain_date = now_local.date()
                 except Exception as e:
                     log.exception(f"LSTM 재학습 중 에러: {e}")
+
+            retrain_left = _fmt_remaining(time_until_next_retrain(last_retrain_date))
+            analysis_left = _fmt_remaining(time_until_next_cloud_analysis())
+            log.info(f"다음 LSTM 재학습까지 {retrain_left} | 다음 클라우드 분석팀 실행까지 {analysis_left}")
 
             for _ in range(CYCLE_INTERVAL_SEC):
                 if _stop:

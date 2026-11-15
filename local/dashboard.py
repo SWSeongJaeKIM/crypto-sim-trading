@@ -132,7 +132,7 @@ PAGE = """
     <div class="cards" id="cards-cumulative"></div>
 
     <h3>최근 거래 20건</h3>
-    <table id="trades"><thead><tr><th>시각</th><th>전략</th><th>구분</th><th>코인</th><th>매수/매도</th><th>수량</th><th>가격(KRW)</th></tr></thead><tbody></tbody></table>
+    <table id="trades"><thead><tr><th>시각</th><th>전략</th><th>구분</th><th>코인</th><th>매수/매도</th><th>수량</th><th>가격(KRW)</th><th>확신도/베팅비율</th></tr></thead><tbody></tbody></table>
 
     <h3>LSTM 실전 예측 적중률 (실제 가격으로 확정된 예측 기준)</h3>
     <table id="pred-acc"><thead><tr><th>코인</th><th>확정된 예측 수</th><th>적중</th><th>적중률</th></tr></thead><tbody></tbody></table>
@@ -250,11 +250,15 @@ async function load() {
   tbody.innerHTML = '';
   for (const t of d.trades) {
     const modeLabel = t.mode === 'reset' ? '리셋' : '누적';
+    // reason에 "확신도 0.64 -> 65%" 형태로 박혀있는 부분만 추출해서 별도 칸에 표시
+    const m = (t.reason || '').match(/확신도\\s*([\\d.]+)\\s*->\\s*(\\d+)%/);
+    const confCell = m ? `${(parseFloat(m[1])*100).toFixed(0)}% → ${m[2]}%` : '-';
     tbody.innerHTML += `<tr>
       <td>${t.timestamp.slice(0,19).replace('T',' ')}</td>
       <td>${t.strategy}</td><td>${modeLabel}</td><td>${t.coin}</td>
       <td class="${t.side === 'BUY' ? 'buy' : 'sell'}">${t.side}</td>
       <td>${t.qty.toFixed(4)}</td><td>${Math.round(t.price_krw).toLocaleString()}</td>
+      <td style="color:var(--text-secondary, #9aa0a6);font-size:12px;">${confCell}</td>
     </tr>`;
   }
 

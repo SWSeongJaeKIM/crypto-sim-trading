@@ -76,6 +76,15 @@ class Strategy(ABC):
     def signal(self, df: pd.DataFrame) -> Signal:
         ...
 
+    def signal_with_confidence(self, df: pd.DataFrame) -> tuple[Signal, float]:
+        """신호와 함께 "이번 신호를 얼마나 확신하는지"(0.0~1.0)를 반환한다.
+        main_loop.py가 이 값으로 베팅 크기(자금의 몇 %를 움직일지)를 정한다
+        — 확신도가 낮으면 적게, 높으면 많이 베팅. 기본 구현은 모든 신호를
+        동일하게 확신(1.0)하는 것으로 처리해, 오버라이드하지 않은 전략도
+        기존과 동일하게 동작한다(하위호환). 신호 강도를 계산할 수 있는
+        전략은 이 메서드를 오버라이드해서 더 정교한 값을 준다."""
+        return self.signal(df), 1.0
+
     def signal_series(self, df: pd.DataFrame) -> pd.Series:
         """df 전체 길이에 대한 신호를 한 번에 계산해 Series(값: BUY/SELL/HOLD)로 반환.
         백테스트(learner.backtest)에서 쓰는 벡터화 경로 — 지표를 한 번만 계산하고
@@ -163,6 +172,23 @@ class MACrossRSIStrategy(Strategy):
         out.iloc[: min_bars - 1] = "HOLD"
         return out
 
+    def signal_with_confidence(self, df: pd.DataFrame) -> tuple[Signal, float]:
+        """RSI가 임계값에서 얼마나 여유 있게 떨어져 있는지로 확신도를 매긴다.
+        예: BUY인데 RSI가 임계값(65) 바로 아래(64)면 애매한 크로스라 확신도↓,
+        RSI가 30처럼 임계값과 멀리 떨어져 있으면 더 뚜렷한 상황이라 확신도↑."""
+        sig = self.signal(df)
+        if sig == "HOLD" or len(df) < self.min_bars():
+            return sig, 0.0
+        p = self.params
+        r = rsi(df["close"], p["rsi_period"])
+        curr_rsi = r.iloc[-1]
+        if sig == "BUY":
+            # RSI가 0에 가까울수록(과매도) 더 확신, rsi_buy_max에 가까울수록 애매
+            margin = (p["rsi_buy_max"] - curr_rsi) / p["rsi_buy_max"]
+        else:  # SELL
+            margin = (curr_rsi - p["rsi_sell_min"]) / (100 - p["rsi_sell_min"])
+        return sig, float(np.clip(margin, 0.0, 1.0))
+
 
 # ---------- 전략 2: 볼린저밴드 + RSI (평균회귀) ----------
 
@@ -217,6 +243,25 @@ class BollingerRSIStrategy(Strategy):
         out.iloc[: min_bars - 1] = "HOLD"
         return out
 
+    def signal_with_confidence(self, df: pd.DataFrame) -> tuple[Signal, float]:
+        """가격이 밴드를 얼마나 많이 뚫고 나갔는지(밴드폭 대비 %)로 확신도를 매긴다.
+        살짝 터치만 한 경우보다 많이 뚫고 나간 경우가 더 뚜렷한 평균회귀 신호."""
+        sig = self.signal(df)
+        if sig == "HOLD" or len(df) < self.min_bars():
+            return sig, 0.0
+        p = self.params
+        close = df["close"]
+        upper, mid, lower = bollinger(close, p["bb_period"], p["bb_std"])
+        band_width = max(upper.iloc[-1] - lower.iloc[-1], 1e-9)
+        price = close.iloc[-1]
+        if sig == "BUY":
+            overshoot = (lower.iloc[-1] - price) / band_width
+        else:  # SELL
+            overshoot = (price - upper.iloc[-1]) / band_width
+        # 밴드폭의 30%만큼 더 뚫고 나가면 "확실한" 신호로 간주(그 이상은 1.0으로 캡)
+        confidence = overshoot / 0.3
+        return sig, float(np.clip(confidence, 0.0, 1.0))
+
 
 # ---------- 전략 3: MACD 모멘텀 ----------
 
@@ -267,6 +312,25 @@ class MACDStrategy(Strategy):
         min_bars = self.min_bars()
         out.iloc[: min_bars - 1] = "HOLD"
         return out
+
+    def signal_with_confidence(self, df: pd.DataFrame) -> tuple[Signal, float]:
+        """크로스 직후 히스토그램이 얼마나 빠르게 벌어지는지(기울기)로 확신도를
+        매긴다. 살짝 양수로 넘어간 것보다 확실하게 치고 올라간 경우가 더
+        뚜렷한 모멘텀 전환 신호."""
+        sig = self.signal(df)
+        if sig == "HOLD" or len(df) < self.min_bars():
+            return sig, 0.0
+        p = self.params
+        close = df["close"]
+        _, _, hist = macd(close, p["fast"], p["slow"], p["signal"])
+        curr_hist = hist.iloc[-1]
+        # 최근 20개 캔들의 히스토그램 표준편차로 정규화 — 평소 변동폭 대비
+        # 이번 전환이 얼마나 큰지를 본다(코인/기간마다 스케일이 다르므로).
+        recent_std = hist.iloc[-20:].std()
+        if not recent_std or np.isnan(recent_std) or recent_std < 1e-9:
+            return sig, 0.5  # 변동성 추정이 불안정하면 중간값으로
+        confidence = abs(curr_hist) / (recent_std * 1.5)
+        return sig, float(np.clip(confidence, 0.0, 1.0))
 
 
 # ---------- 전략 4: 단순 추세추종 (장기 이동평균 위/아래) ----------
@@ -323,6 +387,22 @@ class TrendFollowStrategy(Strategy):
         min_bars = self.min_bars()
         out.iloc[: min_bars - 1] = "HOLD"
         return out
+
+    def signal_with_confidence(self, df: pd.DataFrame) -> tuple[Signal, float]:
+        """가격이 이동평균 밴드를 얼마나 멀리 벗어났는지(이동평균 대비 %)로
+        확신도를 매긴다. 밴드를 살짝 넘은 경우보다 뚜렷하게 추세가 붙은
+        경우가 더 강한 신호."""
+        sig = self.signal(df)
+        if sig == "HOLD" or len(df) < self.min_bars():
+            return sig, 0.0
+        p = self.params
+        close = df["close"]
+        ma_now = sma(close, p["ma_window"]).iloc[-1]
+        price = close.iloc[-1]
+        deviation_pct = abs(price - ma_now) / ma_now * 100
+        # buffer_pct(기본 0.5%)의 4배(2%)만큼 벗어나면 "확실한" 추세로 간주
+        confidence = deviation_pct / (p["buffer_pct"] * 4)
+        return sig, float(np.clip(confidence, 0.0, 1.0))
 
 
 # 등록된 모든 전략 (경쟁에 참여하는 기본 셋)

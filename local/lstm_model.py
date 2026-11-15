@@ -245,6 +245,29 @@ class LSTMStrategy:
             return "SELL"
         return "HOLD"
 
+    def signal_with_confidence(self, df: pd.DataFrame) -> tuple[str, float]:
+        """prob_up이 0.5(완전 모호)에서 얼마나 멀리 떨어져 있는지를 확신도로
+        쓴다. 임계값(0.55/0.45)을 막 넘은 경우는 확신도가 낮고, 0.9나 0.1처럼
+        극단으로 갈수록 1.0에 가까워진다. main_loop.py가 이 값으로 베팅
+        크기를 정한다."""
+        if len(df) < self.min_bars():
+            return "HOLD", 0.0
+        prob_up = predict_proba(self.coin, df)
+        if prob_up is None:
+            return "HOLD", 0.0
+        if prob_up >= PROB_BUY_MIN:
+            sig = "BUY"
+        elif prob_up <= PROB_SELL_MAX:
+            sig = "SELL"
+        else:
+            return "HOLD", 0.0
+        # 임계값(0.05만큼 0.5에서 떨어진 지점)부터 극단(0.5만큼 떨어진 지점,
+        # 즉 prob_up=1.0 또는 0.0)까지를 0~1로 선형 스케일.
+        distance_from_mid = abs(prob_up - 0.5)
+        threshold_distance = 0.5 - PROB_BUY_MIN  # = 0.05
+        confidence = (distance_from_mid - threshold_distance) / (0.5 - threshold_distance)
+        return sig, float(np.clip(confidence, 0.0, 1.0))
+
     @staticmethod
     def default_params() -> dict:
         return {}
