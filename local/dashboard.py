@@ -2,6 +2,11 @@
 로컬 Flask 대시보드. main_loop.py가 쌓는 SQLite(trading.db)를 읍기만 한다
 (쓰기 없음, main_loop와 동시에 돌려도 안전).
 
+"AI 분석팀" 탭은 예외적으로 로컬 DB가 아니라 GitHub에서 데이터를 가져온다
+— 클라우드에서 1시간마다 도는 6에이전트 코드 분석팀(analysis_team/)이
+GitHub에 커밋하는 리포트를 읍어와 보여준다. 인터넷 연결이 없거나 아직
+리포트가 한 번도 안 올라왔으면 그냥 빈 상태로 표시된다(에러 아님).
+
 실행: python3 dashboard.py
 접속: 이 PC에서는 http://localhost:5000
       같은 와이파이의 폰/다른 기기에서는 http://<이PC의 사설IP>:5000
@@ -11,11 +16,60 @@
 
 from __future__ import annotations
 
+import json
+import urllib.error
+import urllib.request
+
 from flask import Flask, jsonify, render_template_string
 
 import storage
 
 app = Flask(__name__)
+
+GITHUB_RAW_BASE = "https://raw.githubusercontent.com/SWSeongJaeKIM/crypto-sim-trading/main"
+_ANALYSIS_CACHE: dict = {"fetched_at": None, "index": None, "reports": {}}
+_ANALYSIS_CACHE_TTL_SEC = 60  # 매 요청마다 GitHub에 때리지 않도록 1분 캐시
+
+
+def _fetch_github_raw(path: str, timeout: float = 5.0) -> str | None:
+    url = f"{GITHUB_RAW_BASE}/{path}"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            return resp.read().decode("utf-8")
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return None
+
+
+def get_analysis_team_data() -> dict:
+    """GitHub의 analysis_team/reports/latest.json + 각 리포트 본문을 가져온다.
+    실패하면(오프라인, 아직 리포트 없음 등) 빈 결과를 반환 — 대시보드 전체가
+    죽지 않도록 항상 dict를 돌려준다."""
+    import time
+    now = time.time()
+    if _ANALYSIS_CACHE["fetched_at"] and now - _ANALYSIS_CACHE["fetched_at"] < _ANALYSIS_CACHE_TTL_SEC:
+        return {"index": _ANALYSIS_CACHE["index"], "reports": _ANALYSIS_CACHE["reports"]}
+
+    index_text = _fetch_github_raw("analysis_team/reports/latest.json")
+    if not index_text:
+        return {"index": None, "reports": {}}
+    try:
+        index = json.loads(index_text)
+    except json.JSONDecodeError:
+        return {"index": None, "reports": {}}
+
+    reports: dict[str, str] = {}
+    for role, info in index.get("roles", {}).items():
+        path = info.get("path")
+        if not path:
+            continue
+        text = _fetch_github_raw(path)
+        if text:
+            reports[role] = text
+
+    _ANALYSIS_CACHE["fetched_at"] = now
+    _ANALYSIS_CACHE["index"] = index
+    _ANALYSIS_CACHE["reports"] = reports
+    return {"index": index, "reports": reports}
 
 PAGE = """
 <!DOCTYPE html>
@@ -44,29 +98,116 @@ PAGE = """
   .dot-training { background:#fbbf24; animation:pulse 1.5s infinite; } .dot-error { background:#f87171; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
   .acc-up { color:#4ade80; } .acc-down { color:#f87171; } .acc-flat { color:#9aa0a6; }
+  .tabs { display:flex; gap:8px; margin-bottom:16px; }
+  .tab-btn { background:#1a1d24; color:#9aa0a6; border:none; border-radius:8px; padding:8px 16px; font-size:14px; cursor:pointer; }
+  .tab-btn.active { background:#2563eb; color:#fff; }
+  .tab-page { display:none; }
+  .tab-page.active { display:block; }
+  .role-card { background:#1a1d24; border-radius:10px; padding:14px; margin-bottom:12px; }
+  .role-card h3 { margin:0 0 6px; font-size:15px; }
+  .role-summary { color:#d1d5db; font-size:13px; margin-bottom:8px; }
+  .role-meta { color:#6b7280; font-size:11px; margin-bottom:8px; }
+  .role-toggle { color:#60a5fa; font-size:12px; cursor:pointer; }
+  .role-body { white-space:pre-wrap; font-size:13px; color:#d1d5db; margin-top:10px; padding-top:10px; border-top:1px solid #2a2d35; display:none; }
+  .role-body.open { display:block; }
+  .synth-card { border:1px solid #2563eb; }
 </style>
 </head>
 <body>
   <h1>🪙 모의투자 대시보드</h1>
-  <div class="sub" id="status">불러오는 중...</div>
-  <div class="progress-bar"><span class="dot dot-idle" id="progress-dot"></span><span id="progress-text">상태 확인 중...</span></div>
 
-  <h3>📅 7일 리셋 포트폴리오 <span style="color:#9aa0a6;font-weight:400;font-size:12px;">(7일마다 1000만원으로 초기화 — 최근 성과 비교용)</span></h3>
-  <div class="cards" id="cards-reset"></div>
+  <div class="tabs">
+    <button class="tab-btn active" id="tab-btn-trading" onclick="showTab('trading')">모의투자</button>
+    <button class="tab-btn" id="tab-btn-analysis" onclick="showTab('analysis')">🤖 AI 분석팀</button>
+  </div>
 
-  <h3>📈 누적 포트폴리오 <span style="color:#9aa0a6;font-weight:400;font-size:12px;">(시작부터 지금까지 쭉 — 장기 성과용)</span></h3>
-  <div class="cards" id="cards-cumulative"></div>
+  <div class="tab-page active" id="tab-trading">
+    <div class="sub" id="status">불러오는 중...</div>
+    <div class="progress-bar"><span class="dot dot-idle" id="progress-dot"></span><span id="progress-text">상태 확인 중...</span></div>
 
-  <h3>최근 거래 20건</h3>
-  <table id="trades"><thead><tr><th>시각</th><th>전략</th><th>구분</th><th>코인</th><th>매수/매도</th><th>수량</th><th>가격(KRW)</th></tr></thead><tbody></tbody></table>
+    <h3>📅 7일 리셋 포트폴리오 <span style="color:#9aa0a6;font-weight:400;font-size:12px;">(7일마다 1000만원으로 초기화 — 최근 성과 비교용)</span></h3>
+    <div class="cards" id="cards-reset"></div>
 
-  <h3>LSTM 실전 예측 적중률 (실제 가격으로 확정된 예측 기준)</h3>
-  <table id="pred-acc"><thead><tr><th>코인</th><th>확정된 예측 수</th><th>적중</th><th>적중률</th></tr></thead><tbody></tbody></table>
+    <h3>📈 누적 포트폴리오 <span style="color:#9aa0a6;font-weight:400;font-size:12px;">(시작부터 지금까지 쭉 — 장기 성과용)</span></h3>
+    <div class="cards" id="cards-cumulative"></div>
 
-  <h3>LSTM 모델 학습 기록 (코인별 최근 10회)</h3>
-  <table id="trainings"><thead><tr><th>시각</th><th>코인</th><th>방식</th><th>데이터기간</th><th>샘플수</th><th>정확도</th></tr></thead><tbody></tbody></table>
+    <h3>최근 거래 20건</h3>
+    <table id="trades"><thead><tr><th>시각</th><th>전략</th><th>구분</th><th>코인</th><th>매수/매도</th><th>수량</th><th>가격(KRW)</th></tr></thead><tbody></tbody></table>
+
+    <h3>LSTM 실전 예측 적중률 (실제 가격으로 확정된 예측 기준)</h3>
+    <table id="pred-acc"><thead><tr><th>코인</th><th>확정된 예측 수</th><th>적중</th><th>적중률</th></tr></thead><tbody></tbody></table>
+
+    <h3>LSTM 모델 학습 기록 (코인별 최근 10회)</h3>
+    <table id="trainings"><thead><tr><th>시각</th><th>코인</th><th>방식</th><th>데이터기간</th><th>샘플수</th><th>정확도</th></tr></thead><tbody></tbody></table>
+  </div>
+
+  <div class="tab-page" id="tab-analysis">
+    <div class="sub" id="analysis-status">불러오는 중...</div>
+    <div id="analysis-synth"></div>
+    <h3>역할별 분석 리포트</h3>
+    <div id="analysis-roles"></div>
+  </div>
 
 <script>
+function showTab(name) {
+  document.getElementById('tab-trading').classList.toggle('active', name === 'trading');
+  document.getElementById('tab-analysis').classList.toggle('active', name === 'analysis');
+  document.getElementById('tab-btn-trading').classList.toggle('active', name === 'trading');
+  document.getElementById('tab-btn-analysis').classList.toggle('active', name === 'analysis');
+  if (name === 'analysis') loadAnalysis();
+}
+
+function toggleRoleBody(id) {
+  document.getElementById(id).classList.toggle('open');
+}
+
+const ROLE_ORDER = ['strategy', 'lstm', 'execution', 'storage', 'risk'];
+const ROLE_ICONS = {strategy:'📐', lstm:'🧠', execution:'⚙️', storage:'🗄️', risk:'⚠️'};
+
+async function loadAnalysis() {
+  const statusEl = document.getElementById('analysis-status');
+  statusEl.innerText = '불러오는 중...';
+  const res = await fetch('/api/analysis');
+  const d = await res.json();
+
+  if (!d.index) {
+    statusEl.innerText = '아직 분석 리포트가 없습니다 (클라우드에서 1시간마다 자동 생성되며, 인터넷 연결이 필요합니다). 잠시 후 다시 확인해주세요.';
+    document.getElementById('analysis-synth').innerHTML = '';
+    document.getElementById('analysis-roles').innerHTML = '';
+    return;
+  }
+  statusEl.innerText = `마지막 분석: ${d.index.generated_at || '-'} (UTC) · 1시간마다 자동 갱신`;
+
+  const synthRole = d.index.roles?.synthesizer;
+  const synthBody = d.reports?.synthesizer;
+  const synthEl = document.getElementById('analysis-synth');
+  if (synthRole && synthBody) {
+    synthEl.innerHTML = `
+      <div class="role-card synth-card">
+        <h3>🏆 ${synthRole.role_label} — 이번 회차 종합</h3>
+        <div class="role-body open">${synthBody.replace(/</g,'&lt;')}</div>
+      </div>`;
+  } else {
+    synthEl.innerHTML = '';
+  }
+
+  const rolesEl = document.getElementById('analysis-roles');
+  rolesEl.innerHTML = '';
+  for (const roleKey of ROLE_ORDER) {
+    const info = d.index.roles?.[roleKey];
+    if (!info) continue;
+    const body = d.reports?.[roleKey] || '(본문을 불러오지 못했습니다)';
+    const bodyId = `role-body-${roleKey}`;
+    rolesEl.innerHTML += `
+      <div class="role-card">
+        <h3>${ROLE_ICONS[roleKey] || ''} ${info.role_label}</h3>
+        <div class="role-meta">${info.timestamp} (UTC)</div>
+        <div class="role-summary">${info.summary}</div>
+        <div class="role-toggle" onclick="toggleRoleBody('${bodyId}')">전체 리포트 보기 / 접기</div>
+        <div class="role-body" id="${bodyId}">${body.replace(/</g,'&lt;')}</div>
+      </div>`;
+  }
+}
 async function load() {
   const res = await fetch('/api/data');
   const d = await res.json();
@@ -152,6 +293,11 @@ async function load() {
 }
 load();
 setInterval(load, 15000);
+// 분석팀 리포트는 1시간마다만 바뀌므로 5분 간격이면 충분 — 지금 분석팀 탭을
+// 보고 있을 때만 갱신한다.
+setInterval(() => {
+  if (document.getElementById('tab-analysis').classList.contains('active')) loadAnalysis();
+}, 5 * 60 * 1000);
 </script>
 </body>
 </html>
@@ -161,6 +307,13 @@ setInterval(load, 15000);
 @app.route("/")
 def index():
     return render_template_string(PAGE)
+
+
+@app.route("/api/analysis")
+def api_analysis():
+    """클라우드 6에이전트 분석팀이 GitHub에 커밋한 최신 코드 리뷰 리포트.
+    로컬 trading.db는 전혀 건드리지 않는다 — GitHub raw 파일만 가져온다."""
+    return jsonify(get_analysis_team_data())
 
 
 @app.route("/api/data")
