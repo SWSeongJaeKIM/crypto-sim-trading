@@ -1,47 +1,47 @@
 {
-  "generated_at": "2026-11-15_1921",
+  "generated_at": "2026-11-15_2017",
   "roles": {
     "execution": {
       "role": "execution",
       "role_label": "실행/버그 분석가",
-      "timestamp": "2026-11-15_1921",
-      "path": "analysis_team/reports/2026-11-15_1921_execution.md",
-      "summary": "전반적인 예외처리 구조는 양호하나(사이클 전체를 감싸는 try/except, 코인별 폴백), 최초 구동 시 학습 호출이 보호되지 않는 지점과 사이클 간격이 고정 60초가 아니라 \"처리시간+60초\"로 누적되는 구조가 실행 안정성 측면의 핵심 리스크다."
+      "timestamp": "2026-11-15_2017",
+      "path": "analysis_team/reports/2026-11-15_2017_execution.md",
+      "summary": "전체적으로 예외처리 틀은 잘 잡혀 있으나, \"전략 1개 실패가 전체 사이클을 막는 범위 문제\"와 \"고정 60초 슬립으로 인한 사이클 주기 드리프트\"가 가장 먼저 손볼 지점이다."
     },
     "lstm": {
       "role": "lstm",
       "role_label": "LSTM 분석가",
-      "timestamp": "2026-11-15_1921",
-      "path": "analysis_team/reports/2026-11-15_1921_lstm.md",
-      "summary": "피처는 자기 코인의 가격·거래량 지표로만 구성돼 시장 전체/타코인 신호가 빠져 있고, 스케일링 없는 `vol_chg`와 고정 `NEUTRAL_BAND`가 코인별로 다르게 작동할 수 있으며, 매일 이어서 파인튜닝만 반복하는 구조는 장기 드리프트를 막을 안전장치가 없다."
+      "timestamp": "2026-11-15_2017",
+      "path": "analysis_team/reports/2026-11-15_2017_lstm.md",
+      "summary": "피처 구성과 모델 크기는 데이터 양 대비 적절한 편이나, 파인튜닝 시 \"이전 모델보다 나빠져도 무조건 덮어쓰는\" 구조와 검증 지표가 실전 난이도보다 쉬운 부분집합만 보는 점이 가장 먼저 손볼 만하다."
     },
     "risk": {
       "role": "risk",
       "role_label": "리스크 분석가",
-      "timestamp": "2026-11-15_1921",
-      "path": "analysis_team/reports/2026-11-15_1921_risk.md",
-      "summary": "코인별 슬롯 분리와 리셋/누적 이중 포트폴리오 구조는 집중 손실 방지와 단기/장기 평가라는 목적에 기본적으로 부합하지만, \"균등 배분=균등 리스크\"라는 가정과 연속 고확신 매매 시 쿨다운 부재가 가장 큰 보완 지점이다."
+      "timestamp": "2026-11-15_2017",
+      "path": "analysis_team/reports/2026-11-15_2017_risk.md",
+      "summary": "자금 배분 구조(코인 독립 슬롯, reset/cumulative 이중화)는 설계 의도에 맞게 안전하게 짜여 있으나, \"손실을 스스로 멈추는 장치\"가 코드 어디에도 없다는 점이 가장 큰 구조적 리스크다."
     },
     "storage": {
       "role": "storage",
       "role_label": "데이터/저장소 분석가",
-      "timestamp": "2026-11-15_1921",
-      "path": "analysis_team/reports/2026-11-15_1921_storage.md",
-      "summary": "가장 심각한 문제는 스키마 자체가 아니라 `connect()`의 커밋 시점 설계이며, 이로 인해 `main_loop`의 장시간 실행 동안 거래/포트폴리오 기록이 사실상 커밋되지 않고 대시보드가 이를 보지 못할 가능성이 있다. 스키마·인덱스 설계는 전반적으로 쿼리 패턴에 맞게 잘 되어 있"
+      "timestamp": "2026-11-15_2017",
+      "path": "analysis_team/reports/2026-11-15_2017_storage.md",
+      "summary": "스키마와 쿼리 설계는 현재 규모에서는 대체로 적절하지만, 동시 쓰기/읽기 시 락 경합과 predictions 테이블의 무제한 누적이 장기 운영 시 문제가 될 수 있다."
     },
     "strategy": {
       "role": "strategy",
       "role_label": "전략 분석가",
-      "timestamp": "2026-11-15_1921",
-      "path": "analysis_team/reports/2026-11-15_1921_strategy.md",
-      "summary": "4개 전략 중 3개(ma_cross_rsi, macd_momentum, trend_follow)가 사실상 같은 \"이동평균 크로스오버 추세추종\" 계열이라 상관성이 높고, MACD 파라미터(12/26/9)는 일봉용 표준값을 1분봉에 그대로 가져온 흔적이 뚜렷하다."
+      "timestamp": "2026-11-15_2017",
+      "path": "analysis_team/reports/2026-11-15_2017_strategy.md",
+      "summary": "조건식 로직 자체는 각각 타당하지만, \"거래량을 전혀 쓰지 않는다\"는 점과 \"4개 중 2개가 사실상 같은 크로스오버 신호\"라는 점이 1분봉 운영에서 가장 먼저 손볼 지점이다."
     },
     "synthesizer": {
       "role": "synthesizer",
       "role_label": "종합 조정자",
-      "timestamp": "2026-11-15_1921",
-      "path": "analysis_team/reports/2026-11-15_1921_synthesizer.md",
-      "summary": "**1. storage.py 커밋 시점 수정 (storage 리포트 최우선 항목)**"
+      "timestamp": "2026-11-15_2017",
+      "path": "analysis_team/reports/2026-11-15_2017_synthesizer.md",
+      "summary": "**1. SQLite WAL 모드 + busy_timeout 적용 (storage)**"
     }
   }
 }
