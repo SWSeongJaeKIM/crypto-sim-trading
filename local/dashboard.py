@@ -17,6 +17,7 @@ GitHub에 커밋하는 리포트를 읍어와 보여준다. 인터넷 연결이 
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.request
 
@@ -27,8 +28,11 @@ import storage
 app = Flask(__name__)
 
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/SWSeongJaeKIM/crypto-sim-trading/main"
+GITHUB_API_CONTENTS = "https://api.github.com/repos/SWSeongJaeKIM/crypto-sim-trading/contents/analysis_team/reports"
 _ANALYSIS_CACHE: dict = {"fetched_at": None, "index": None, "reports": {}}
 _ANALYSIS_CACHE_TTL_SEC = 60  # 매 요청마다 GitHub에 때리지 않도록 1분 캐시
+_HISTORY_CACHE: dict = {"fetched_at": None, "timestamps": []}
+_HISTORY_CACHE_TTL_SEC = 300  # 회차 목록은 5분에 한 번만 다시 조회
 
 
 def _fetch_github_raw(path: str, timeout: float = 5.0) -> str | None:
@@ -70,6 +74,48 @@ def get_analysis_team_data() -> dict:
     _ANALYSIS_CACHE["index"] = index
     _ANALYSIS_CACHE["reports"] = reports
     return {"index": index, "reports": reports}
+
+
+def get_analysis_history_timestamps() -> list[str]:
+    """GitHub에 쌓인 모든 회차의 타임스탬프 목록(최신순)을 돌려준다.
+    파일명 규칙(reports/<YYYY-MM-DD_HHMM>_<role>.md)에서 타임스탬프만 추출해
+    중복 제거. GitHub Contents API를 쓰므로 비인증 호출 레이트리밋(시간당
+    60회)에 걸릴 수 있는데, 실패하면 빈 리스트를 반환해 조용히 넘어간다."""
+    import time
+    now = time.time()
+    if _HISTORY_CACHE["fetched_at"] and now - _HISTORY_CACHE["fetched_at"] < _HISTORY_CACHE_TTL_SEC:
+        return _HISTORY_CACHE["timestamps"]
+
+    try:
+        req = urllib.request.Request(
+            GITHUB_API_CONTENTS, headers={"Accept": "application/vnd.github+json"}
+        )
+        with urllib.request.urlopen(req, timeout=6.0) as resp:
+            listing = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+        return _HISTORY_CACHE["timestamps"]  # 실패하면 이전 캐시(없으면 빈 리스트) 유지
+
+    timestamps = set()
+    for entry in listing if isinstance(listing, list) else []:
+        name = entry.get("name", "")
+        m = re.match(r"^(\d{4}-\d{2}-\d{2}_\d{4})_[a-z_]+\.md$", name)
+        if m:
+            timestamps.add(m.group(1))
+
+    sorted_ts = sorted(timestamps, reverse=True)  # 최신 회차 먼저
+    _HISTORY_CACHE["fetched_at"] = now
+    _HISTORY_CACHE["timestamps"] = sorted_ts
+    return sorted_ts
+
+
+def get_analysis_round(timestamp: str) -> dict:
+    """특정 회차(timestamp)의 6개 역할 리포트 본문을 GitHub에서 가져온다."""
+    reports: dict[str, str] = {}
+    for role in ["strategy", "lstm", "execution", "storage", "risk", "synthesizer"]:
+        text = _fetch_github_raw(f"analysis_team/reports/{timestamp}_{role}.md")
+        if text:
+            reports[role] = text
+    return reports
 
 PAGE = """
 <!DOCTYPE html>
@@ -165,8 +211,14 @@ PAGE = """
   <div class="tab-page" id="tab-analysis">
     <div class="sub" id="analysis-status">불러오는 중...</div>
     <div class="office-grid" id="office-grid"></div>
+
+    <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+      <label for="round-select" style="font-size:13px; color:#9aa0a6;">회차 선택:</label>
+      <select id="round-select" onchange="onRoundChange()" style="background:#1a1d24; color:#e6e6e6; border:1px solid #2a2d35; border-radius:6px; padding:6px 10px; font-size:13px;"></select>
+    </div>
+
     <div id="analysis-synth"></div>
-    <h3>역할별 분석 리포트</h3>
+    <h3>역할별 분석 리포트 (에이전트들이 한 말 전체)</h3>
     <div id="analysis-roles"></div>
   </div>
 
@@ -177,10 +229,6 @@ function showTab(name) {
   document.getElementById('tab-btn-trading').classList.toggle('active', name === 'trading');
   document.getElementById('tab-btn-analysis').classList.toggle('active', name === 'analysis');
   if (name === 'analysis') loadAnalysis();
-}
-
-function toggleRoleBody(id) {
-  document.getElementById(id).classList.toggle('open');
 }
 
 const ROLE_ORDER = ['strategy', 'lstm', 'execution', 'storage', 'risk', 'synthesizer'];
@@ -230,6 +278,56 @@ function renderOffice(roleStates) {
   }).join('');
 }
 
+// roleInfoMap: {role: {role_label, timestamp, summary}} (latest.json 형태, 없으면 null)
+// reports: {role: '본문 텍스트'}
+// 리포트 본문은 항상 펼쳐진 채로 보여준다 — "에이전트들이 한 말"을 바로 읽을 수 있게.
+function renderRound(reports, roleInfoMap) {
+  const synthEl = document.getElementById('analysis-synth');
+  const synthBody = reports?.synthesizer;
+  if (synthBody) {
+    const synthLabel = roleInfoMap?.synthesizer?.role_label || ROLE_LABELS_FALLBACK.synthesizer;
+    synthEl.innerHTML = `
+      <div class="role-card synth-card">
+        <h3>🏆 ${synthLabel} — 이 회차 종합</h3>
+        <div class="role-body open">${synthBody.replace(/</g,'&lt;')}</div>
+      </div>`;
+  } else {
+    synthEl.innerHTML = '';
+  }
+
+  const rolesEl = document.getElementById('analysis-roles');
+  rolesEl.innerHTML = '';
+  for (const roleKey of ROLE_ORDER.filter(k => k !== 'synthesizer')) {
+    const body = reports?.[roleKey];
+    if (!body) continue;
+    const info = roleInfoMap?.[roleKey];
+    const label = info?.role_label || ROLE_LABELS_FALLBACK[roleKey];
+    const meta = info?.timestamp ? `<div class="role-meta">${info.timestamp} (UTC)</div>` : '';
+    const summary = info?.summary ? `<div class="role-summary">${info.summary}</div>` : '';
+    rolesEl.innerHTML += `
+      <div class="role-card">
+        <h3>${ROLE_ICONS[roleKey] || ''} ${label}</h3>
+        ${meta}${summary}
+        <div class="role-body open">${body.replace(/</g,'&lt;')}</div>
+      </div>`;
+  }
+}
+
+async function onRoundChange() {
+  const sel = document.getElementById('round-select');
+  const ts = sel.value;
+  if (!ts) return;
+  if (ts === '__latest__') {
+    const res = await fetch('/api/analysis');
+    const d = await res.json();
+    renderRound(d.reports, d.index?.roles);
+    return;
+  }
+  const res = await fetch(`/api/analysis/round/${ts}`);
+  const d = await res.json();
+  renderRound(d.reports, null);
+}
+
 async function loadAnalysis() {
   const statusEl = document.getElementById('analysis-status');
   statusEl.innerText = '불러오는 중...';
@@ -255,34 +353,28 @@ async function loadAnalysis() {
   });
   renderOffice(roleStates);
 
-  const synthRole = d.index.roles?.synthesizer;
-  const synthBody = d.reports?.synthesizer;
-  const synthEl = document.getElementById('analysis-synth');
-  if (synthRole && synthBody) {
-    synthEl.innerHTML = `
-      <div class="role-card synth-card">
-        <h3>🏆 ${synthRole.role_label} — 이번 회차 종합</h3>
-        <div class="role-body open">${synthBody.replace(/</g,'&lt;')}</div>
-      </div>`;
-  } else {
-    synthEl.innerHTML = '';
+  // 회차 선택 드롭다운: 최신 회차를 기본값으로, 과거 회차는 이력 API에서 받아온다.
+  const sel = document.getElementById('round-select');
+  const wasEmpty = sel.options.length === 0;
+  if (wasEmpty) {
+    sel.innerHTML = `<option value="__latest__">최신 (${d.index.generated_at || '-'})</option>`;
+    try {
+      const histRes = await fetch('/api/analysis/history');
+      const hist = await histRes.json();
+      for (const ts of (hist.timestamps || [])) {
+        if (ts === d.index.generated_at) continue;  // 최신은 이미 위에 있음
+        const opt = document.createElement('option');
+        opt.value = ts;
+        opt.textContent = ts;
+        sel.appendChild(opt);
+      }
+    } catch (e) { /* 이력 조회 실패해도 최신 회차는 계속 보여줌 */ }
   }
 
-  const rolesEl = document.getElementById('analysis-roles');
-  rolesEl.innerHTML = '';
-  for (const roleKey of ROLE_ORDER.filter(k => k !== 'synthesizer')) {
-    const info = d.index.roles?.[roleKey];
-    if (!info) continue;
-    const body = d.reports?.[roleKey] || '(본문을 불러오지 못했습니다)';
-    const bodyId = `role-body-${roleKey}`;
-    rolesEl.innerHTML += `
-      <div class="role-card">
-        <h3>${ROLE_ICONS[roleKey] || ''} ${info.role_label}</h3>
-        <div class="role-meta">${info.timestamp} (UTC)</div>
-        <div class="role-summary">${info.summary}</div>
-        <div class="role-toggle" onclick="toggleRoleBody('${bodyId}')">전체 리포트 보기 / 접기</div>
-        <div class="role-body" id="${bodyId}">${body.replace(/</g,'&lt;')}</div>
-      </div>`;
+  // 지금 "최신"이 선택된 상태일 때만 자동 갱신 내용을 반영 (과거 회차를 보고 있으면 안 덮어씀)
+  if (sel.value === '__latest__' || wasEmpty) {
+    sel.value = '__latest__';
+    renderRound(d.reports, d.index.roles);
   }
 }
 async function load() {
@@ -395,6 +487,20 @@ def api_analysis():
     """클라우드 6에이전트 분석팀이 GitHub에 커밋한 최신 코드 리뷰 리포트.
     로컬 trading.db는 전혀 건드리지 않는다 — GitHub raw 파일만 가져온다."""
     return jsonify(get_analysis_team_data())
+
+
+@app.route("/api/analysis/history")
+def api_analysis_history():
+    """과거 전체 회차의 타임스탬프 목록 (최신순)."""
+    return jsonify({"timestamps": get_analysis_history_timestamps()})
+
+
+@app.route("/api/analysis/round/<timestamp>")
+def api_analysis_round(timestamp: str):
+    """특정 회차의 6개 역할 리포트 본문. timestamp 형식: YYYY-MM-DD_HHMM."""
+    if not re.match(r"^\d{4}-\d{2}-\d{2}_\d{4}$", timestamp):
+        return jsonify({"error": "잘못된 타임스탬프 형식"}), 400
+    return jsonify({"timestamp": timestamp, "reports": get_analysis_round(timestamp)})
 
 
 @app.route("/api/data")
