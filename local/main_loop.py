@@ -120,14 +120,46 @@ def _fmt_remaining(delta: timedelta) -> str:
     return f"{s}초"
 
 
-def time_until_next_retrain(last_retrain_date) -> timedelta:
-    """다음 LSTM 재학습(매일 RETRAIN_HOUR_LOCAL시, 로컬시간)까지 남은 시간.
-    last_retrain_date가 오늘이면 다음 재학습은 내일 이 시각."""
+def retrain_is_due(last_retrain_date) -> bool:
+    """지금 LSTM 재학습을 돌려야 하는지 판단.
+
+    "지금이 정확히 RETRAIN_HOUR_LOCAL시다"가 아니라 "오늘 RETRAIN_HOUR_LOCAL시가
+    이미 지났는데 아직 오늘 학습을 안 했다"로 판단한다. 전자로 하면 그 정확한
+    1시간(예: 4시대) 사이클을 PC가 꺼져 있거나 재시작 등으로 놓치는 순간
+    그날은 영영 재학습을 못 하고 다음날까지 기다리게 되는 문제가 있었다."""
     now_local = datetime.now()
+    if now_local.hour < RETRAIN_HOUR_LOCAL:
+        return False
+    return last_retrain_date != now_local.date()
+
+
+def time_until_next_retrain(last_retrain_date) -> timedelta:
+    """다음 LSTM 재학습까지 남은 시간(표시용).
+    오늘 RETRAIN_HOUR_LOCAL시가 지났는데 아직 안 했으면 "0초"(지금 바로) —
+    실제로 다음 사이클에 바로 돌아간다. 이미 오늘 했으면 내일 이 시각까지."""
+    now_local = datetime.now()
+    if retrain_is_due(last_retrain_date):
+        return timedelta(seconds=0)
     target = now_local.replace(hour=RETRAIN_HOUR_LOCAL, minute=0, second=0, microsecond=0)
-    if target <= now_local or last_retrain_date == now_local.date():
+    if target <= now_local:
         target += timedelta(days=1)
     return target - now_local
+
+
+def last_retrain_date_from_storage(conn):
+    """storage에 저장된 last_lstm_train 메타(UTC timestamp)를 읽어서,
+    로컬 날짜로 변환해 반환한다. main_loop.py가 재시작돼도 "오늘 이미
+    재학습했는지"를 메모리가 아니라 여기서 복원한다. 기록이 없으면 None."""
+    meta = storage.get_meta(conn, "last_lstm_train")
+    if not meta or not meta.get("timestamp"):
+        return None
+    try:
+        ts = datetime.fromisoformat(meta["timestamp"])
+    except (TypeError, ValueError):
+        return None
+    if ts.tzinfo is not None:
+        ts = ts.astimezone()  # UTC -> 로컬 타임존
+    return ts.date()
 
 
 def confidence_to_trade_fraction(confidence: float) -> float:
@@ -275,9 +307,15 @@ def main():
         has_any_model = any((lstm_model.MODEL_DIR / f"{c}_lstm.pt").exists() for c in COINS)
         if not has_any_model:
             log.info("저장된 LSTM 모델이 없어 최초 학습을 먼저 수행합니다 (몇 분 걸릴 수 있음)...")
-            retrain_lstm(conn)
+            retrain_lstm(conn)  # 이 안에서 last_lstm_train 메타를 저장함
 
-        last_retrain_date = None
+        # 메모리 변수가 아니라 storage에 저장된 마지막 재학습 시각으로
+        # 시작한다 — main_loop.py를 재시작해도 "오늘 이미 했는지"를 안다.
+        # (바로 위에서 최초 학습을 했다면 그 기록이 여기서 바로 "오늘"로 잡힌다.)
+        last_retrain_date = last_retrain_date_from_storage(conn)
+        if last_retrain_date:
+            log.info(f"마지막 LSTM 재학습: {last_retrain_date} (저장된 기록 기준)")
+
         while not _stop:
             try:
                 run_one_cycle(conn)
@@ -285,7 +323,7 @@ def main():
                 log.exception(f"사이클 실행 중 에러 (스킵하고 계속): {e}")
 
             now_local = datetime.now()
-            if now_local.hour == RETRAIN_HOUR_LOCAL and last_retrain_date != now_local.date():
+            if retrain_is_due(last_retrain_date):
                 try:
                     retrain_lstm(conn)
                     last_retrain_date = now_local.date()
