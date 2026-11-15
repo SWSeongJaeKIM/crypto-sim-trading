@@ -1,0 +1,6 @@
+trading.db
+run.log
+models/
+data_cache/
+__pycache__/
+*.pyc
