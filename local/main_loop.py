@@ -30,7 +30,7 @@ from strategies import ALL_STRATEGIES
 TRADE_FRACTION = 0.5          # 매수/매도 시 자금의 몇 %를 움직일지
 CYCLE_INTERVAL_SEC = 60       # 매매 사이클 주기 (1분봉이므로 60초)
 RETRAIN_HOUR_LOCAL = 4        # 매일 이 시(0~23, 로컬 시간)에 LSTM 재학습
-HISTORY_DAYS_FOR_TRAIN = 14   # LSTM 학습에 쓸 최근 일수
+HISTORY_DAYS_FOR_TRAIN = 30   # LSTM 학습에 쓸 최근 일수
 STRATEGY_NAMES = list(ALL_STRATEGIES.keys()) + ["lstm_predictor"]
 
 logging.basicConfig(
