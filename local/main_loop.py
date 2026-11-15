@@ -8,6 +8,15 @@ Claude/인터넷상의 AI를 전혀 호출하지 않는다. 이 파일 하나를
     신호 계산 -> 모의 매수/매도 -> SQLite에 상태 저장
   - 매일 1회(기본 새벽 4시): 최근 N일 1분봉으로 LSTM 재학습
 
+전략별로 포트폴리오를 2개씩(리셋용 + 누적용) 동시에 운영한다:
+  - "<strategy>__reset"      : RESET_DAYS일마다 1000만원으로 초기화.
+    "최근 N일 동안 이 전략이 잘하고 있나"를 보기 위한 단기 비교용.
+    과거의 우연한 한 번의 거래가 전체 성과를 계속 왜곡하지 않도록 함.
+  - "<strategy>__cumulative" : 처음 시작 이후 한 번도 리셋 안 함.
+    "이 전략이 장기적으로 얼마나 벌었나"를 보기 위한 전체 기간용.
+신호 계산(어떤 코인을 사고 팔지)은 두 포트폴리오가 동일하게 따르고,
+각자의 가상 계좌 상태(현금/보유량)만 독립적으로 갖는다.
+
 중지하려면 Ctrl+C. 로그는 콘솔과 local/run.log에 같이 남는다.
 """
 
@@ -17,7 +26,7 @@ import logging
 import signal
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
@@ -32,6 +41,8 @@ CYCLE_INTERVAL_SEC = 60       # 매매 사이클 주기 (1분봉이므로 60초)
 RETRAIN_HOUR_LOCAL = 4        # 매일 이 시(0~23, 로컬 시간)에 LSTM 재학습
 HISTORY_DAYS_FOR_TRAIN = 30   # LSTM 학습에 쓸 최근 일수
 STRATEGY_NAMES = list(ALL_STRATEGIES.keys()) + ["lstm_predictor"]
+RESET_DAYS = 7                # "리셋" 포트폴리오를 며칠마다 1000만원으로 초기화할지
+PORTFOLIO_MODES = ["reset", "cumulative"]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -64,11 +75,32 @@ def set_progress(conn, stage: str, detail: str = "", **extra) -> None:
     })
 
 
-def load_or_new_portfolio(conn, strategy_name: str) -> Portfolio:
-    doc = storage.get_portfolio(conn, strategy_name)
+def portfolio_key(strategy_name: str, mode: str) -> str:
+    """storage의 portfolios 테이블은 strategy 하나를 PK로 쓰므로,
+    '<strategy>__<mode>' 형태로 이름 공간을 나눠 reset/cumulative를 구분한다."""
+    return f"{strategy_name}__{mode}"
+
+
+def load_or_new_portfolio(conn, strategy_name: str, mode: str = "cumulative") -> Portfolio:
+    key = portfolio_key(strategy_name, mode)
+    doc = storage.get_portfolio(conn, key)
     if doc:
-        return Portfolio.from_doc(doc)
-    return Portfolio.new(strategy_name, coins=COINS, initial_capital_krw=INITIAL_CAPITAL_KRW)
+        pf = Portfolio.from_doc(doc)
+        if mode == "reset" and _reset_is_due(pf.created_at):
+            log.info(f"[{key}] {RESET_DAYS}일 경과 — 포트폴리오 초기화")
+            return Portfolio.new(key, coins=COINS, initial_capital_krw=INITIAL_CAPITAL_KRW)
+        return pf
+    return Portfolio.new(key, coins=COINS, initial_capital_krw=INITIAL_CAPITAL_KRW)
+
+
+def _reset_is_due(created_at_iso: str) -> bool:
+    try:
+        created_at = datetime.fromisoformat(created_at_iso)
+    except (TypeError, ValueError):
+        return False
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - created_at >= timedelta(days=RESET_DAYS)
 
 
 def run_one_cycle(conn) -> None:
@@ -96,32 +128,43 @@ def run_one_cycle(conn) -> None:
             params = storage.get_params(conn, strat_name) or ALL_STRATEGIES[strat_name].default_params()
             strat = ALL_STRATEGIES[strat_name](**params)
 
-        pf = load_or_new_portfolio(conn, strat_name)
+        # 신호(BUY/SELL/HOLD)는 전략당 1번만 계산하고, reset/cumulative 두
+        # 포트폴리오에 동일하게 적용한다 (매매 판단 로직은 같고, 계좌 상태만 분리).
+        portfolios = {mode: load_or_new_portfolio(conn, strat_name, mode) for mode in PORTFOLIO_MODES}
+        signals: dict[str, str] = {}
 
         for coin, df in candles.items():
-            if coin not in prices_krw or coin not in pf.slots or df.empty:
+            if coin not in prices_krw or df.empty:
                 continue
             if strat_name == "lstm_predictor":
                 strat.coin = coin
             if len(df) < strat.min_bars():
                 continue
             signal_ = strat.signal(df)
+            signals[coin] = signal_
             price = prices_krw[coin]
 
             if strat_name == "lstm_predictor":
                 prob_up = lstm_model.predict_proba(coin, df)
                 if prob_up is not None:
                     storage.add_prediction(conn, coin, now, prob_up, price)
-            if signal_ == "BUY":
-                pf.buy(coin, price, pct_of_cash=TRADE_FRACTION, reason=f"{strat_name} BUY")
-            elif signal_ == "SELL":
-                pf.sell(coin, price, pct_of_qty=TRADE_FRACTION, reason=f"{strat_name} SELL")
 
-        storage.set_portfolio(conn, strat_name, pf.to_doc(), now)
-        storage.add_trades(conn, strat_name, pf.new_trades_as_dicts())
-        total_value = pf.total_value_krw(prices_krw)
-        pnl_pct = pf.pnl_pct(prices_krw)
-        storage.add_snapshot(conn, strat_name, now, total_value, pnl_pct)
+        for mode, pf in portfolios.items():
+            for coin, signal_ in signals.items():
+                if coin not in pf.slots:
+                    continue
+                price = prices_krw[coin]
+                if signal_ == "BUY":
+                    pf.buy(coin, price, pct_of_cash=TRADE_FRACTION, reason=f"{strat_name} BUY")
+                elif signal_ == "SELL":
+                    pf.sell(coin, price, pct_of_qty=TRADE_FRACTION, reason=f"{strat_name} SELL")
+
+            key = portfolio_key(strat_name, mode)
+            storage.set_portfolio(conn, key, pf.to_doc(), now)
+            storage.add_trades(conn, key, pf.new_trades_as_dicts())
+            total_value = pf.total_value_krw(prices_krw)
+            pnl_pct = pf.pnl_pct(prices_krw)
+            storage.add_snapshot(conn, key, now, total_value, pnl_pct)
 
     storage.set_meta(conn, "status", {"last_run_at": now, "prices_krw": prices_krw, "source": "upbit"})
     log.info(f"사이클 완료 @ {now} | 가격 샘플 BTC={prices_krw.get('BTC')}")

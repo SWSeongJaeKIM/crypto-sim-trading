@@ -50,9 +50,15 @@ PAGE = """
   <h1>🪙 모의투자 대시보드</h1>
   <div class="sub" id="status">불러오는 중...</div>
   <div class="progress-bar"><span class="dot dot-idle" id="progress-dot"></span><span id="progress-text">상태 확인 중...</span></div>
-  <div class="cards" id="cards"></div>
+
+  <h3>📅 7일 리셋 포트폴리오 <span style="color:#9aa0a6;font-weight:400;font-size:12px;">(7일마다 1000만원으로 초기화 — 최근 성과 비교용)</span></h3>
+  <div class="cards" id="cards-reset"></div>
+
+  <h3>📈 누적 포트폴리오 <span style="color:#9aa0a6;font-weight:400;font-size:12px;">(시작부터 지금까지 쭉 — 장기 성과용)</span></h3>
+  <div class="cards" id="cards-cumulative"></div>
+
   <h3>최근 거래 20건</h3>
-  <table id="trades"><thead><tr><th>시각</th><th>전략</th><th>코인</th><th>구분</th><th>수량</th><th>가격(KRW)</th></tr></thead><tbody></tbody></table>
+  <table id="trades"><thead><tr><th>시각</th><th>전략</th><th>구분</th><th>코인</th><th>매수/매도</th><th>수량</th><th>가격(KRW)</th></tr></thead><tbody></tbody></table>
 
   <h3>LSTM 실전 예측 적중률 (실제 가격으로 확정된 예측 기준)</h3>
   <table id="pred-acc"><thead><tr><th>코인</th><th>확정된 예측 수</th><th>적중</th><th>적중률</th></tr></thead><tbody></tbody></table>
@@ -75,27 +81,37 @@ async function load() {
   document.getElementById('progress-text').innerText =
     `[${stageLabel}] ${p.detail || ''}` + (p.updated_at ? ` (${p.updated_at.slice(11,19)})` : '');
 
-  const cards = document.getElementById('cards');
-  cards.innerHTML = '';
-  const sorted = [...d.portfolios].sort((a,b) => b.pnl_pct - a.pnl_pct);
-  for (const p of sorted) {
-    const cls = p.pnl_pct >= 0 ? 'pnl-pos' : 'pnl-neg';
-    const pnlSign = p.pnl_krw >= 0 ? '+' : '';
-    cards.innerHTML += `
-      <div class="card">
-        <h3>${p.strategy}</h3>
-        <div class="${cls}">${p.pnl_pct >= 0 ? '+' : ''}${p.pnl_pct.toFixed(2)}%</div>
-        <div class="${cls}" style="font-size:14px;margin-top:2px;">${pnlSign}${Math.round(p.pnl_krw).toLocaleString()}원</div>
-        <div style="color:#9aa0a6;font-size:12px;margin-top:4px;">평가액 ${Math.round(p.total_value_krw).toLocaleString()}원 (원금 ${Math.round(p.initial_capital_krw).toLocaleString()}원) · 거래 ${p.trade_count}건</div>
-      </div>`;
+  function renderCards(containerId, mode) {
+    const container = document.getElementById(containerId);
+    container.innerHTML = '';
+    const sorted = d.portfolios.filter(p => p.mode === mode).sort((a,b) => b.pnl_pct - a.pnl_pct);
+    for (const p of sorted) {
+      const cls = p.pnl_pct >= 0 ? 'pnl-pos' : 'pnl-neg';
+      const pnlSign = p.pnl_krw >= 0 ? '+' : '';
+      let resetNote = '';
+      if (mode === 'reset' && p.created_at) {
+        resetNote = `<div style="color:#60a5fa;font-size:11px;margin-top:2px;">이번 주기 시작: ${p.created_at.slice(0,10)}</div>`;
+      }
+      container.innerHTML += `
+        <div class="card">
+          <h3>${p.strategy}</h3>
+          <div class="${cls}">${p.pnl_pct >= 0 ? '+' : ''}${p.pnl_pct.toFixed(2)}%</div>
+          <div class="${cls}" style="font-size:14px;margin-top:2px;">${pnlSign}${Math.round(p.pnl_krw).toLocaleString()}원</div>
+          <div style="color:#9aa0a6;font-size:12px;margin-top:4px;">평가액 ${Math.round(p.total_value_krw).toLocaleString()}원 (원금 ${Math.round(p.initial_capital_krw).toLocaleString()}원) · 거래 ${p.trade_count}건</div>
+          ${resetNote}
+        </div>`;
+    }
   }
+  renderCards('cards-reset', 'reset');
+  renderCards('cards-cumulative', 'cumulative');
 
   const tbody = document.querySelector('#trades tbody');
   tbody.innerHTML = '';
   for (const t of d.trades) {
+    const modeLabel = t.mode === 'reset' ? '리셋' : '누적';
     tbody.innerHTML += `<tr>
       <td>${t.timestamp.slice(0,19).replace('T',' ')}</td>
-      <td>${t.strategy}</td><td>${t.coin}</td>
+      <td>${t.strategy}</td><td>${modeLabel}</td><td>${t.coin}</td>
       <td class="${t.side === 'BUY' ? 'buy' : 'sell'}">${t.side}</td>
       <td>${t.qty.toFixed(4)}</td><td>${Math.round(t.price_krw).toLocaleString()}</td>
     </tr>`;
@@ -157,19 +173,32 @@ def api_data():
 
         portfolios = []
         for name, doc in portfolios_raw.items():
+            # name은 "<strategy>__reset" 또는 "<strategy>__cumulative" 형태.
+            strategy, _, mode = name.rpartition("__")
+            if mode not in ("reset", "cumulative"):
+                strategy, mode = name, "cumulative"  # 혹시 옛 데이터가 남아있으면 누적으로 간주
             total = sum(s["cash_krw"] + s["qty"] * prices.get(c, 0) for c, s in doc["slots"].items())
             initial = doc["initial_capital_krw"]
             pnl = (total / initial - 1.0) * 100
             portfolios.append({
-                "strategy": name,
+                "strategy": strategy,
+                "mode": mode,
                 "total_value_krw": total,
                 "initial_capital_krw": initial,
                 "pnl_krw": total - initial,
                 "pnl_pct": pnl,
                 "trade_count": doc.get("trade_count", 0),
+                "created_at": doc.get("created_at"),
             })
 
         trades = storage.recent_trades(conn, limit=20)
+        for t in trades:
+            strategy, _, mode = t["strategy"].rpartition("__")
+            if mode in ("reset", "cumulative"):
+                t["strategy"] = strategy
+                t["mode"] = mode
+            else:
+                t["mode"] = "cumulative"
 
         # 코인별 최근 10회, 화면엔 시간순(과거->최신)으로 묶어서 내려줘야
         # 프론트에서 "이전 대비 ▲▼" 추이 계산이 바로 된다.
