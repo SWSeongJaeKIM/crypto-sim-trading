@@ -38,14 +38,24 @@ PAGE = """
   th { color:#9aa0a6; font-weight:500; }
   .buy { color:#4ade80; } .sell { color:#f87171; }
   .refresh { color:#60a5fa; font-size:12px; cursor:pointer; }
+  .progress-bar { background:#1a1d24; border-radius:10px; padding:12px 14px; margin-bottom:16px; display:flex; align-items:center; gap:10px; }
+  .dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+  .dot-idle { background:#6b7280; } .dot-collecting,.dot-cycle_running { background:#60a5fa; animation:pulse 1.5s infinite; }
+  .dot-training { background:#fbbf24; animation:pulse 1.5s infinite; } .dot-error { background:#f87171; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  .acc-up { color:#4ade80; } .acc-down { color:#f87171; } .acc-flat { color:#9aa0a6; }
 </style>
 </head>
 <body>
   <h1>🪙 모의투자 대시보드</h1>
   <div class="sub" id="status">불러오는 중...</div>
+  <div class="progress-bar"><span class="dot dot-idle" id="progress-dot"></span><span id="progress-text">상태 확인 중...</span></div>
   <div class="cards" id="cards"></div>
   <h3>최근 거래 20건</h3>
   <table id="trades"><thead><tr><th>시각</th><th>전략</th><th>코인</th><th>구분</th><th>수량</th><th>가격(KRW)</th></tr></thead><tbody></tbody></table>
+
+  <h3>LSTM 모델 학습 기록 (코인별 최근 10회)</h3>
+  <table id="trainings"><thead><tr><th>시각</th><th>코인</th><th>방식</th><th>데이터기간</th><th>샘플수</th><th>정확도</th></tr></thead><tbody></tbody></table>
 
 <script>
 async function load() {
@@ -53,6 +63,14 @@ async function load() {
   const d = await res.json();
   document.getElementById('status').innerText =
     `마지막 갱신: ${d.meta?.last_run_at || '-'} | 현재가 BTC=${Math.round(d.meta?.prices_krw?.BTC || 0).toLocaleString()}원`;
+
+  const p = d.progress || {};
+  const dot = document.getElementById('progress-dot');
+  dot.className = 'dot dot-' + (p.stage || 'idle');
+  const stageLabel = {idle:'대기 중', collecting:'데이터 수집 중', cycle_running:'매매 사이클 실행 중',
+                      training:'LSTM 학습 중', sleeping:'대기 중', error:'에러'}[p.stage] || p.stage || '알수없음';
+  document.getElementById('progress-text').innerText =
+    `[${stageLabel}] ${p.detail || ''}` + (p.updated_at ? ` (${p.updated_at.slice(11,19)})` : '');
 
   const cards = document.getElementById('cards');
   cards.innerHTML = '';
@@ -77,6 +95,32 @@ async function load() {
       <td>${t.qty.toFixed(4)}</td><td>${Math.round(t.price_krw).toLocaleString()}</td>
     </tr>`;
   }
+
+  // d.trainings는 코인별로 시간순(과거->최신) 묶음 — 먼저 추이(▲▼)를 계산한 뒤
+  // 화면엔 최신이 위로 오도록 뒤집어서 보여준다.
+  const lastAccByCoin = {};
+  const rowsHtml = [];
+  for (const t of d.trainings) {
+    const prev = lastAccByCoin[t.coin];
+    lastAccByCoin[t.coin] = t.val_accuracy;
+    let trend = '';
+    if (prev !== undefined && t.val_accuracy !== null) {
+      if (t.val_accuracy > prev) trend = '<span class="acc-up">▲</span>';
+      else if (t.val_accuracy < prev) trend = '<span class="acc-down">▼</span>';
+      else trend = '<span class="acc-flat">–</span>';
+    }
+    const acc = t.val_accuracy !== null ? (t.val_accuracy*100).toFixed(1) + '%' : '-';
+    const period = (t.data_start && t.data_end) ? `${t.data_start.slice(0,10)}~${t.data_end.slice(0,10)}` : '-';
+    rowsHtml.push(`<tr>
+      <td>${(t.timestamp||'').slice(0,19).replace('T',' ')}</td>
+      <td>${t.coin}</td>
+      <td>${t.model_type === 'lstm_finetune' ? '추가학습' : '최초학습'}</td>
+      <td>${period}</td>
+      <td>${t.n_samples ?? '-'}</td>
+      <td>${acc} ${trend}</td>
+    </tr>`);
+  }
+  document.querySelector('#trainings tbody').innerHTML = rowsHtml.reverse().join('');
 }
 load();
 setInterval(load, 15000);
@@ -96,6 +140,7 @@ def api_data():
     with storage.connect() as conn:
         portfolios_raw = storage.get_all_portfolios(conn)
         meta = storage.get_meta(conn, "status") or {}
+        progress = storage.get_meta(conn, "progress") or {}
         prices = meta.get("prices_krw", {})
 
         portfolios = []
@@ -111,7 +156,15 @@ def api_data():
 
         trades = storage.recent_trades(conn, limit=20)
 
-    return jsonify({"meta": meta, "portfolios": portfolios, "trades": trades})
+        # 코인별 최근 10회, 화면엔 시간순(과거->최신)으로 묶어서 내려줘야
+        # 프론트에서 "이전 대비 ▲▼" 추이 계산이 바로 된다.
+        trainings: list[dict] = []
+        for coin in ["BTC", "ETH", "XRP", "SOL", "DOGE", "ADA"]:
+            rows = storage.model_training_history(conn, coin=coin, limit=10)
+            trainings.extend(reversed(rows))  # 오래된 것 먼저
+
+    return jsonify({"meta": meta, "progress": progress, "portfolios": portfolios,
+                     "trades": trades, "trainings": trainings})
 
 
 if __name__ == "__main__":

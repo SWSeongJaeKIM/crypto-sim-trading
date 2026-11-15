@@ -121,10 +121,13 @@ def fetch_all_latest_candles(count: int = 200) -> dict[str, pd.DataFrame]:
     return result
 
 
-def fetch_all_minute_history(days: int = 14, cache: bool = True) -> dict[str, pd.DataFrame]:
-    """6대 코인의 최근 N일 1분봉 전체 (LSTM 학습/재학습 시 호출). 디스크 캐시 지원."""
+def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=None) -> dict[str, pd.DataFrame]:
+    """6대 코인의 최근 N일 1분봉 전체 (LSTM 학습/재학습 시 호출). 디스크 캐시 지원.
+    on_progress(coin, index, total): 코인 하나 수집 시작할 때마다 호출 (대시보드 진행표시용, 선택)."""
     result: dict[str, pd.DataFrame] = {}
-    for coin in COINS:
+    for i, coin in enumerate(COINS, start=1):
+        if on_progress:
+            on_progress(coin, i, len(COINS))
         cache_path = DATA_DIR / f"{coin}_1m_{days}d.csv"
         try:
             df = fetch_minute_history(UPBIT_MARKETS[coin], days=days)

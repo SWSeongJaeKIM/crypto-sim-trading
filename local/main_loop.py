@@ -53,6 +53,17 @@ signal.signal(signal.SIGINT, _handle_sigint)
 signal.signal(signal.SIGTERM, _handle_sigint)
 
 
+def set_progress(conn, stage: str, detail: str = "", **extra) -> None:
+    """대시보드가 보여줄 '지금 뭐 하고 있는지' 상태. 매 단계 전환마다 갱신.
+    stage: idle | collecting | training | cycle_running | sleeping | error"""
+    storage.set_meta(conn, "progress", {
+        "stage": stage,
+        "detail": detail,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        **extra,
+    })
+
+
 def load_or_new_portfolio(conn, strategy_name: str) -> Portfolio:
     doc = storage.get_portfolio(conn, strategy_name)
     if doc:
@@ -62,10 +73,14 @@ def load_or_new_portfolio(conn, strategy_name: str) -> Portfolio:
 
 def run_one_cycle(conn) -> None:
     now = datetime.now(timezone.utc).isoformat()
+    set_progress(conn, "collecting", "최신 1분봉 수집 중...")
     candles = data_fetcher.fetch_all_latest_candles(count=max(lstm_model.SEQ_LEN + 5, 200))
     if not candles:
         log.warning("캔들 수집 실패 — 이번 사이클 스킵")
+        set_progress(conn, "error", "캔들 수집 실패, 다음 사이클에 재시도")
         return
+
+    set_progress(conn, "cycle_running", "5개 전략 신호 계산/매매 중...")
 
     prices_krw = {coin: float(df["close"].iloc[-1]) for coin, df in candles.items() if len(df)}
 
@@ -99,23 +114,49 @@ def run_one_cycle(conn) -> None:
         storage.add_snapshot(conn, strat_name, now, total_value, pnl_pct)
 
     storage.set_meta(conn, "status", {"last_run_at": now, "prices_krw": prices_krw, "source": "upbit"})
-    n_trades_this_cycle = sum(
-        1 for name in STRATEGY_NAMES
-        for _ in storage.recent_trades(conn, name, limit=1)
-    )
     log.info(f"사이클 완료 @ {now} | 가격 샘플 BTC={prices_krw.get('BTC')}")
 
 
 def retrain_lstm(conn) -> None:
     log.info(f"LSTM 재학습 시작 (최근 {HISTORY_DAYS_FOR_TRAIN}일 1분봉)...")
-    history = data_fetcher.fetch_all_minute_history(days=HISTORY_DAYS_FOR_TRAIN)
-    results = lstm_model.train_all(history, epochs=8)
-    for r in results:
+    results = []
+
+    def _on_fetch_progress(coin, i, total):
+        set_progress(conn, "training", f"{coin} 데이터 수집 중... ({i}/{total})",
+                     current_coin=coin, coin_index=i, coin_total=total, train_step="fetching")
+
+    history = data_fetcher.fetch_all_minute_history(days=HISTORY_DAYS_FOR_TRAIN, on_progress=_on_fetch_progress)
+
+    for i, (coin, df) in enumerate(history.items(), start=1):
+        set_progress(conn, "training", f"{coin} 모델 학습 중... ({i}/{len(history)})",
+                     current_coin=coin, coin_index=i, coin_total=len(history), train_step="fitting")
+        r = lstm_model.train_model(coin, df, epochs=8, history_days=HISTORY_DAYS_FOR_TRAIN)
+        results.append(r)
         log.info(f"  {r}")
+        # 학습할 때마다 누적 기록 (덮어쓰지 않음) — 대시보드에서 정확도 추이를 보기 위함
+        storage.add_model_training(conn, {
+            "coin": coin,
+            "timestamp": r.get("timestamp", datetime.now(timezone.utc).isoformat()),
+            "model_type": "lstm_finetune" if r.get("finetuned") else "lstm_initial",
+            "feature_cols": lstm_model.FEATURE_COLS,
+            "seq_len": r.get("seq_len", lstm_model.SEQ_LEN),
+            "history_days": HISTORY_DAYS_FOR_TRAIN,
+            "data_start": r.get("data_start"),
+            "data_end": r.get("data_end"),
+            "n_samples": r.get("n_samples"),
+            "n_train": r.get("n_train"),
+            "n_val": r.get("n_val"),
+            "val_accuracy": r.get("val_accuracy"),
+            "epochs": r.get("epochs"),
+            "trained": r.get("trained", False),
+            "reason": r.get("reason", ""),
+        })
+
     storage.set_meta(conn, "last_lstm_train", {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "results": results,
     })
+    set_progress(conn, "idle", "학습 완료, 대기 중")
 
 
 def main():

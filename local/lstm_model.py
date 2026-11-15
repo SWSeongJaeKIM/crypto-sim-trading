@@ -97,12 +97,34 @@ class LSTMClassifier(nn.Module):
         return self.head(last).squeeze(-1)  # logit
 
 
+HISTORY_DIR = MODEL_DIR / "history"
+HISTORY_DIR.mkdir(exist_ok=True, parents=True)
+
+
 def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 256,
-                 lr: float = 1e-3, seq_len: int = SEQ_LEN, val_frac: float = 0.15) -> dict:
-    """한 코인에 대해 LSTM을 학습하고 모델 파일로 저장. 반환: 학습 결과 요약 dict."""
+                 lr: float = 1e-3, seq_len: int = SEQ_LEN, val_frac: float = 0.15,
+                 finetune: bool = True, history_days: int | None = None) -> dict:
+    """한 코인에 대해 LSTM을 학습(또는 파인튜닝)하고 모델 파일로 저장.
+
+    finetune=True(기본): 기존 저장된 가중치가 있으면 그걸 불러와 이어서 학습
+    (추가학습). 없으면 새로 초기화해서 학습(최초 학습과 동일).
+    finetune=False: 항상 처음부터 새로 학습.
+
+    저장은 두 곳에: 최신 가중치는 {coin}_lstm.pt(추론용, 매번 덮어씀),
+    그리고 history/{coin}_lstm_YYYY-MM-DD.pt 로 그날 날짜 사본도 같이 남긴다
+    (하루 여러 번 재학습해도 그날 파일은 마지막 결과로 덮어씀 — 날짜당 1개 유지)."""
     X, y = build_dataset(df, seq_len=seq_len)
+    timestamp = pd.Timestamp.now(tz="UTC").isoformat()
+    data_start = str(df["open_time"].iloc[0]) if len(df) else None
+    data_end = str(df["open_time"].iloc[-1]) if len(df) else None
+
     if len(X) < 500:
-        return {"coin": coin, "trained": False, "reason": f"데이터 부족 (샘플 {len(X)}개, 최소 500 필요)"}
+        return {
+            "coin": coin, "trained": False,
+            "reason": f"데이터 부족 (샘플 {len(X)}개, 최소 500 필요)",
+            "timestamp": timestamp, "data_start": data_start, "data_end": data_end,
+            "history_days": history_days, "seq_len": seq_len,
+        }
 
     n = len(X)
     split = int(n * (1 - val_frac))
@@ -110,6 +132,11 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
     y_train, y_val = y[:split], y[split:]
 
     model = LSTMClassifier()
+    existing_path = MODEL_DIR / f"{coin}_lstm.pt"
+    resumed_from_existing = finetune and existing_path.exists()
+    if resumed_from_existing:
+        model.load_state_dict(torch.load(existing_path, map_location="cpu"))
+
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     loss_fn = nn.BCEWithLogitsLoss()
 
@@ -122,7 +149,6 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
     n_batches = max(1, len(X_train) // batch_size)
     for epoch in range(epochs):
         perm = torch.randperm(len(X_train))
-        total_loss = 0.0
         for b in range(n_batches):
             idx = perm[b * batch_size: (b + 1) * batch_size]
             if len(idx) == 0:
@@ -132,7 +158,6 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
             loss = loss_fn(logits, y_train_t[idx])
             loss.backward()
             opt.step()
-            total_loss += loss.item()
 
     model.eval()
     with torch.no_grad():
@@ -140,13 +165,26 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
         val_pred = (torch.sigmoid(val_logits) > 0.5).float()
         val_acc = (val_pred == y_val_t).float().mean().item()
 
-    torch.save(model.state_dict(), MODEL_DIR / f"{coin}_lstm.pt")
+    torch.save(model.state_dict(), existing_path)
+    date_str = pd.Timestamp.now().strftime("%Y-%m-%d")
+    torch.save(model.state_dict(), HISTORY_DIR / f"{coin}_lstm_{date_str}.pt")
+
+    _loaded_models.pop(coin, None)  # 추론 캐시 무효화 (다음 predict_proba가 새 가중치 로드)
+
     return {
         "coin": coin,
         "trained": True,
+        "finetuned": resumed_from_existing,
         "n_samples": n,
+        "n_train": len(X_train),
+        "n_val": len(X_val),
         "val_accuracy": round(val_acc, 4),
         "epochs": epochs,
+        "timestamp": timestamp,
+        "data_start": data_start,
+        "data_end": data_end,
+        "history_days": history_days,
+        "seq_len": seq_len,
     }
 
 
