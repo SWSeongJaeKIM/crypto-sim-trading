@@ -84,6 +84,11 @@ def run_one_cycle(conn) -> None:
 
     prices_krw = {coin: float(df["close"].iloc[-1]) for coin, df in candles.items() if len(df)}
 
+    # 지난 사이클에 LSTM이 냈던 예측들을 이번 사이클의 실제가로 확정 (적중여부 계산)
+    n_resolved = storage.resolve_predictions(conn, prices_krw)
+    if n_resolved:
+        log.info(f"LSTM 예측 {n_resolved}건 확정")
+
     for strat_name in STRATEGY_NAMES:
         if strat_name == "lstm_predictor":
             strat = lstm_model.LSTMStrategy(coin=None)  # coin은 코인별로 아래서 바꿔 끼움
@@ -102,6 +107,11 @@ def run_one_cycle(conn) -> None:
                 continue
             signal_ = strat.signal(df)
             price = prices_krw[coin]
+
+            if strat_name == "lstm_predictor":
+                prob_up = lstm_model.predict_proba(coin, df)
+                if prob_up is not None:
+                    storage.add_prediction(conn, coin, now, prob_up, price)
             if signal_ == "BUY":
                 pf.buy(coin, price, pct_of_cash=TRADE_FRACTION, reason=f"{strat_name} BUY")
             elif signal_ == "SELL":

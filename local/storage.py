@@ -21,6 +21,13 @@ Claude API 전부 쓰지 않음 — 순수 로컬 파일 I/O.
     — LSTM을 재학습할 때마다 1행씩 누적 (덮어쓰지 않음). "이 모델이 언제,
     어떤 기간의 데이터로, 몇 개 샘플로 학습됐고 정확도가 얼마였는지"를
     시간순으로 전부 보존해서, 대시보드에서 모델 성능 추이를 볼 수 있게 한다.
+  predictions(id INTEGER PK AUTOINCREMENT, coin TEXT, predicted_at TEXT,
+              prob_up REAL, predicted_direction TEXT, price_at_prediction REAL,
+              resolved INTEGER, actual_price REAL, correct INTEGER)
+    — LSTM이 실시간으로 매 사이클 "다음 1분 상승확률"을 추론할 때마다 1행
+    기록 (학습 때의 val_accuracy는 과거 데이터 기준이고, 이건 "실전에서
+    실제로 맞았는지"를 보여준다). 다음 사이클에서 그 시점 실제가를 채워
+    넣어 적중여부(correct)를 계산 — 이게 '예측 적중률'의 재료가 된다.
 """
 
 from __future__ import annotations
@@ -80,6 +87,19 @@ CREATE TABLE IF NOT EXISTS model_trainings (
     reason TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_model_trainings_coin ON model_trainings(coin, timestamp DESC);
+CREATE TABLE IF NOT EXISTS predictions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    coin TEXT NOT NULL,
+    predicted_at TEXT NOT NULL,
+    prob_up REAL NOT NULL,
+    predicted_direction TEXT NOT NULL,
+    price_at_prediction REAL NOT NULL,
+    resolved INTEGER NOT NULL DEFAULT 0,
+    actual_price REAL,
+    correct INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_predictions_coin ON predictions(coin, predicted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_predictions_unresolved ON predictions(resolved);
 """
 
 
@@ -213,3 +233,60 @@ def model_training_history(conn, coin: str | None = None, limit: int = 50) -> li
         d["feature_cols"] = json.loads(d.pop("feature_cols_json"))
         out.append(d)
     return out
+
+
+def add_prediction(conn, coin: str, predicted_at: str, prob_up: float, price_at_prediction: float) -> None:
+    """LSTM이 이번 사이클에 낸 '다음 1분 상승확률' 예측 1건을 기록 (미확정 상태).
+    다음 사이클에서 resolve_predictions()가 실제가를 채워 적중여부를 계산한다."""
+    direction = "UP" if prob_up >= 0.5 else "DOWN"
+    conn.execute(
+        """INSERT INTO predictions (coin, predicted_at, prob_up, predicted_direction, price_at_prediction, resolved)
+           VALUES (?,?,?,?,?,0)""",
+        (coin, predicted_at, prob_up, direction, price_at_prediction),
+    )
+
+
+def resolve_predictions(conn, current_prices_krw: dict[str, float]) -> int:
+    """아직 확정 안 된(resolved=0) 예측들 중, 예측 시점과 다른(=1사이클 지난) 것들을
+    현재가로 확정짓는다. 예측방향(UP/DOWN)과 실제 가격변화 방향이 일치하면 correct=1.
+    반환: 이번에 확정한 건수."""
+    rows = conn.execute("SELECT * FROM predictions WHERE resolved = 0").fetchall()
+    n = 0
+    for r in rows:
+        coin = r["coin"]
+        if coin not in current_prices_krw:
+            continue
+        actual_price = current_prices_krw[coin]
+        if actual_price == r["price_at_prediction"]:
+            continue  # 가격이 안 바뀐 사이클이면 다음 기회에 확정 (방향 판단 불가)
+        actual_direction = "UP" if actual_price > r["price_at_prediction"] else "DOWN"
+        correct = 1 if actual_direction == r["predicted_direction"] else 0
+        conn.execute(
+            "UPDATE predictions SET resolved=1, actual_price=?, correct=? WHERE id=?",
+            (actual_price, correct, r["id"]),
+        )
+        n += 1
+    return n
+
+
+def prediction_accuracy(conn, coin: str | None = None, limit: int = 500) -> dict:
+    """확정된(resolved=1) 예측들의 적중률 요약. coin 생략하면 전체 코인 합산."""
+    if coin:
+        rows = conn.execute(
+            "SELECT correct FROM predictions WHERE resolved=1 AND coin=? ORDER BY predicted_at DESC LIMIT ?",
+            (coin, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT correct FROM predictions WHERE resolved=1 ORDER BY predicted_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    total = len(rows)
+    correct = sum(1 for r in rows if r["correct"])
+    return {"coin": coin, "total": total, "correct": correct,
+            "accuracy": round(correct / total, 4) if total else None}
+
+
+def prediction_accuracy_by_coin(conn, limit_per_coin: int = 500) -> list[dict]:
+    coins = [r["coin"] for r in conn.execute("SELECT DISTINCT coin FROM predictions").fetchall()]
+    return [prediction_accuracy(conn, coin=c, limit=limit_per_coin) for c in coins]

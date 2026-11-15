@@ -54,6 +54,9 @@ PAGE = """
   <h3>최근 거래 20건</h3>
   <table id="trades"><thead><tr><th>시각</th><th>전략</th><th>코인</th><th>구분</th><th>수량</th><th>가격(KRW)</th></tr></thead><tbody></tbody></table>
 
+  <h3>LSTM 실전 예측 적중률 (실제 가격으로 확정된 예측 기준)</h3>
+  <table id="pred-acc"><thead><tr><th>코인</th><th>확정된 예측 수</th><th>적중</th><th>적중률</th></tr></thead><tbody></tbody></table>
+
   <h3>LSTM 모델 학습 기록 (코인별 최근 10회)</h3>
   <table id="trainings"><thead><tr><th>시각</th><th>코인</th><th>방식</th><th>데이터기간</th><th>샘플수</th><th>정확도</th></tr></thead><tbody></tbody></table>
 
@@ -77,11 +80,13 @@ async function load() {
   const sorted = [...d.portfolios].sort((a,b) => b.pnl_pct - a.pnl_pct);
   for (const p of sorted) {
     const cls = p.pnl_pct >= 0 ? 'pnl-pos' : 'pnl-neg';
+    const pnlSign = p.pnl_krw >= 0 ? '+' : '';
     cards.innerHTML += `
       <div class="card">
         <h3>${p.strategy}</h3>
         <div class="${cls}">${p.pnl_pct >= 0 ? '+' : ''}${p.pnl_pct.toFixed(2)}%</div>
-        <div style="color:#9aa0a6;font-size:12px;margin-top:4px;">평가액 ${Math.round(p.total_value_krw).toLocaleString()}원 · 거래 ${p.trade_count}건</div>
+        <div class="${cls}" style="font-size:14px;margin-top:2px;">${pnlSign}${Math.round(p.pnl_krw).toLocaleString()}원</div>
+        <div style="color:#9aa0a6;font-size:12px;margin-top:4px;">평가액 ${Math.round(p.total_value_krw).toLocaleString()}원 (원금 ${Math.round(p.initial_capital_krw).toLocaleString()}원) · 거래 ${p.trade_count}건</div>
       </div>`;
   }
 
@@ -121,6 +126,13 @@ async function load() {
     </tr>`);
   }
   document.querySelector('#trainings tbody').innerHTML = rowsHtml.reverse().join('');
+
+  const accRows = [...d.prediction_accuracy].sort((a,b) => (b.accuracy ?? -1) - (a.accuracy ?? -1));
+  document.querySelector('#pred-acc tbody').innerHTML = accRows.map(a => {
+    const accPct = a.accuracy !== null ? (a.accuracy*100).toFixed(1) + '%' : '아직 없음';
+    const cls = a.accuracy === null ? '' : (a.accuracy >= 0.5 ? 'acc-up' : 'acc-down');
+    return `<tr><td>${a.coin}</td><td>${a.total}</td><td>${a.correct}</td><td class="${cls}">${accPct}</td></tr>`;
+  }).join('');
 }
 load();
 setInterval(load, 15000);
@@ -146,10 +158,13 @@ def api_data():
         portfolios = []
         for name, doc in portfolios_raw.items():
             total = sum(s["cash_krw"] + s["qty"] * prices.get(c, 0) for c, s in doc["slots"].items())
-            pnl = (total / doc["initial_capital_krw"] - 1.0) * 100
+            initial = doc["initial_capital_krw"]
+            pnl = (total / initial - 1.0) * 100
             portfolios.append({
                 "strategy": name,
                 "total_value_krw": total,
+                "initial_capital_krw": initial,
+                "pnl_krw": total - initial,
                 "pnl_pct": pnl,
                 "trade_count": doc.get("trade_count", 0),
             })
@@ -163,8 +178,11 @@ def api_data():
             rows = storage.model_training_history(conn, coin=coin, limit=10)
             trainings.extend(reversed(rows))  # 오래된 것 먼저
 
+        prediction_accuracy = storage.prediction_accuracy_by_coin(conn)
+
     return jsonify({"meta": meta, "progress": progress, "portfolios": portfolios,
-                     "trades": trades, "trainings": trainings})
+                     "trades": trades, "trainings": trainings,
+                     "prediction_accuracy": prediction_accuracy})
 
 
 if __name__ == "__main__":
