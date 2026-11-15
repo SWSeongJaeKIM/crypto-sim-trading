@@ -1,0 +1,47 @@
+{
+  "generated_at": "2026-11-15_1618",
+  "roles": {
+    "execution": {
+      "role": "execution",
+      "role_label": "실행/버그 분석가",
+      "timestamp": "2026-11-15_1618",
+      "path": "analysis_team/reports/2026-11-15_1618_execution.md",
+      "summary": "전체적으로 사이클 단위 예외처리(`run_one_cycle` 전체를 감싸는 try/except)는 잘 되어 있어 \"한 사이클 실패 → 다음 사이클 재시도\"라는 복구 흐름은 견고하지만, 부팅 시점 LSTM 최초 학습과 `_http_get_json`의 예외 범위, 그리고 사이클 주기 계산 "
+    },
+    "lstm": {
+      "role": "lstm",
+      "role_label": "LSTM 분석가",
+      "timestamp": "2026-11-15_1618",
+      "path": "analysis_team/reports/2026-11-15_1618_lstm.md",
+      "summary": "구조 자체(피처 5개, SEQ_LEN=60, hidden=32)는 데이터 규모에 맞게 보수적으로 잘 잡혀 있으나, \"매일 재학습 결과를 검증 없이 그냥 덮어쓰는\" 부분이 가장 큰 리스크다."
+    },
+    "risk": {
+      "role": "risk",
+      "role_label": "리스크 분석가",
+      "timestamp": "2026-11-15_1618",
+      "path": "analysis_team/reports/2026-11-15_1618_risk.md",
+      "summary": "코드 구조상 포지션 크기(최대 90% 베팅)와 코인별 균등 배분이 변동성 차이를 반영하지 않고, 손실을 제한하는 하한 장치(스톱로스/서킷브레이커)가 전혀 없다는 점이 가장 큰 리스크 요인이다."
+    },
+    "storage": {
+      "role": "storage",
+      "role_label": "데이터/저장소 분석가",
+      "timestamp": "2026-11-15_1618",
+      "path": "analysis_team/reports/2026-11-15_1618_storage.md",
+      "summary": "스키마/인덱스 설계 자체는 쿼리 패턴에 맞게 합리적으로 짜여 있다. 다만 `main_loop.py`가 전체 루프를 하나의 커넥션·트랜잭션으로 묶어 쓰는 구조 때문에, \"정상 종료 전까지는 디스크에 커밋되지 않는\" 심각한 구조적 리스크가 있다."
+    },
+    "strategy": {
+      "role": "strategy",
+      "role_label": "전략 분석가",
+      "timestamp": "2026-11-15_1618",
+      "path": "analysis_team/reports/2026-11-15_1618_strategy.md",
+      "summary": "4개 조건식의 전반적인 구조는 합리적이지만, RSI 계산 로직의 엣지 케이스 버그와 거래량 필터 부재, 그리고 파라미터가 1분봉 스캘핑이 아닌 일봉/스윙 트레이딩의 \"교과서 값\"을 그대로 가져온 흔적이 확인됩니다."
+    },
+    "synthesizer": {
+      "role": "synthesizer",
+      "role_label": "종합 조정자",
+      "timestamp": "2026-11-15_1618",
+      "path": "analysis_team/reports/2026-11-15_1618_synthesizer.md",
+      "summary": "**1. (storage) 사이클 단위 커밋 누락 → 비정상 종료 시 데이터 전손 위험**"
+    }
+  }
+}
