@@ -57,6 +57,11 @@ CREATE TABLE IF NOT EXISTS trades (
     timestamp TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy, timestamp DESC);
+-- recent_trades(strategy=None)이 호출하는 "strategy 필터 없는 전체 조회"
+-- (대시보드의 "전체 최근 거래", dashboard.py가 매 새로고침마다 호출)는
+-- idx_trades_strategy의 선두 컬럼(strategy)을 못 써서 전체 스캔이 된다.
+-- timestamp 단독 인덱스를 추가해 그 경로가 인덱스로 처리되게 한다.
+CREATE INDEX IF NOT EXISTS idx_trades_timestamp ON trades(timestamp DESC);
 CREATE TABLE IF NOT EXISTS snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     strategy TEXT NOT NULL,
