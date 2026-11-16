@@ -80,15 +80,30 @@ def fetch_latest_minute_candles(market: str, count: int = 200) -> pd.DataFrame:
     return _parse_minute_df(raw)
 
 
-def fetch_minute_history(market: str, days: int = 14, sleep_sec: float = 0.12, max_pages: int = 1000) -> pd.DataFrame:
+def fetch_minute_history(market: str, days: int = 14, sleep_sec: float = 0.12,
+                          max_pages: int | None = None, on_page=None) -> pd.DataFrame:
     """최근 `days`일치 1분봉 전체를 페이지네이션으로 수집 (LSTM 학습용).
     Upbit은 페이지당 최대 200개(=200분)만 주므로, days=14면 약 14*1440/200≈101회 호출.
-    `to` 파라미터로 과거 방향 페이지네이션."""
+    `to` 파라미터로 과거 방향 페이지네이션.
+
+    max_pages 기본값은 None이면 필요 페이지 수(days*1440/200)에 20% 여유를 더해
+    자동 계산한다 (예: 30일 -> 216 * 1.2 ≈ 259). 이렇게 상한을 현실적으로 두는 이유:
+    예전에 상한이 1000으로 고정돼 있을 때, Upbit이 같은 시점을 반복 응답하는 등
+    `to` 파라미터가 실질적으로 전진하지 않는 드문 경우 break 조건을 못 만족해서
+    최악의 경우 1000페이지 전체를 돌며 몇 시간씩 멈춘 것처럼 보이는 버그가 있었음
+    ("어쩔 때는 멈추고 어쩔 때는 그냥 돌아간다"는 바로 이 증상).
+
+    on_page(page_idx, oldest_time, rows_so_far): 페이지 하나 받을 때마다 호출
+    (진행 로그/진행률 표시용, 선택). 멈춘 건지 그냥 느린 건지 구분하려면 필수."""
     cutoff = pd.Timestamp.now() - pd.Timedelta(days=days)
+    if max_pages is None:
+        max_pages = int(days * 1440 / 200 * 1.2) + 5
     all_rows: list[dict] = []
     to_param = ""
+    prev_to_param = None
+    stuck_count = 0
 
-    for _ in range(max_pages):
+    for page_idx in range(1, max_pages + 1):
         url = f"{UPBIT_BASE}/v1/candles/minutes/1?market={market}&count=200"
         if to_param:
             url += f"&to={to_param}"
@@ -98,10 +113,31 @@ def fetch_minute_history(market: str, days: int = 14, sleep_sec: float = 0.12, m
         all_rows.extend(raw)
         oldest = raw[-1]
         oldest_time = pd.to_datetime(oldest["candle_date_time_kst"])
-        to_param = oldest["candle_date_time_utc"]
+        new_to_param = oldest["candle_date_time_utc"]
+
+        if on_page:
+            on_page(page_idx, oldest_time, len(all_rows))
+
+        # 진행이 전혀 안 되는 경우(같은 to 파라미터 반복) 감지 — 멈춘 것처럼
+        # 보이는 무한 루프를 조기에 끊어낸다. 1~2회는 API 쪽의 일시적 중복
+        # 응답일 수 있으니 바로 끊지 않고 몇 번 더 참아본 뒤 포기한다.
+        if new_to_param == prev_to_param:
+            stuck_count += 1
+            if stuck_count >= 3:
+                print(f"[WARN] {market} 페이지네이션이 {new_to_param} 시점에서 "
+                      f"전진하지 않아 중단 (수집된 {len(all_rows)}개로 계속)")
+                break
+        else:
+            stuck_count = 0
+        prev_to_param = new_to_param
+        to_param = new_to_param
+
         if oldest_time <= cutoff or len(raw) < 200:
             break
         time.sleep(sleep_sec)
+    else:
+        print(f"[WARN] {market} 수집이 max_pages({max_pages})에 도달해 중단됨 "
+              f"(목표 {days}일 중 일부만 수집됐을 수 있음)")
 
     if not all_rows:
         return pd.DataFrame(columns=["open_time", "open", "high", "low", "close", "volume"])
@@ -124,13 +160,22 @@ def fetch_all_latest_candles(count: int = 200) -> dict[str, pd.DataFrame]:
 def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=None) -> dict[str, pd.DataFrame]:
     """6대 코인의 최근 N일 1분봉 전체 (LSTM 학습/재학습 시 호출). 디스크 캐시 지원.
     on_progress(coin, index, total): 코인 하나 수집 시작할 때마다 호출 (대시보드 진행표시용, 선택)."""
+    expected_pages = int(days * 1440 / 200)
     result: dict[str, pd.DataFrame] = {}
     for i, coin in enumerate(COINS, start=1):
         if on_progress:
             on_progress(coin, i, len(COINS))
+
+        def _on_page(page_idx, oldest_time, rows_so_far, _coin=coin):
+            # 10페이지마다(약 1~2초 간격) 한 번씩만 찍어서 로그 폭주를 막되,
+            # "멈춘 건지 그냥 느린 건지"는 바로 구분할 수 있게 한다.
+            if page_idx % 10 == 0 or page_idx == 1:
+                print(f"  [{_coin}] 페이지 {page_idx}/~{expected_pages} 수집 중... "
+                      f"(누적 {rows_so_far}개, 가장 오래된 시점 {oldest_time})")
+
         cache_path = DATA_DIR / f"{coin}_1m_{days}d.csv"
         try:
-            df = fetch_minute_history(UPBIT_MARKETS[coin], days=days)
+            df = fetch_minute_history(UPBIT_MARKETS[coin], days=days, on_page=_on_page)
             result[coin] = df
             if cache and len(df):
                 df.to_csv(cache_path, index=False)
