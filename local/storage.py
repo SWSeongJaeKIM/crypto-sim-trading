@@ -50,7 +50,16 @@ PORTFOLIO_KEY_SEP = "__"
 
 def make_portfolio_key(strategy: str, variant: str) -> str:
     """portfolios.strategy 컬럼에 쓰는 합성 키를 만든다. 기존에 main_loop.py가
-    썼던 f"{strategy_name}__{mode}"와 동일한 포맷."""
+    썼던 f"{strategy_name}__{mode}"와 동일한 포맷.
+
+    variant는 parse_portfolio_key()가 역파싱할 수 있는 값("reset"/"cumulative")
+    으로만 제한한다. 검증 없이 오타(예: "reste")나 새 variant가 들어오면 쓰기
+    시점엔 조용히 성공하지만 읽기 시점(parse_portfolio_key)에서 구분자를 못 찾아
+    전체 키를 strategy로, variant는 무조건 "cumulative"로 취급해버려 조용한
+    데이터 오분류가 생긴다 — 쓰기 시점에 바로 실패시켜 그 문제를 막는다
+    (analysis_team 리포트 2026-11-16_1718_storage.md 제안)."""
+    if variant not in ("reset", "cumulative"):
+        raise ValueError(f"알 수 없는 portfolio variant: {variant!r} (reset/cumulative만 허용)")
     return f"{strategy}{PORTFOLIO_KEY_SEP}{variant}"
 
 
