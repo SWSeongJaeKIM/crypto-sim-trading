@@ -57,7 +57,15 @@ CLOUD_ANALYSIS_MINUTE_UTC = 17
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler("run.log", encoding="utf-8")],
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        # heartbeat.txt처럼 절대경로로 고정 (analysis_team execution 리포트
+        # 2026-11-16_1422 제안). 상대경로("run.log")였을 때는 watchdog.bat나
+        # OS 서비스가 local/이 아닌 다른 작업 디렉토리에서 프로세스를 띄우면
+        # 모듈 docstring이 말하는 "local/run.log"와 다른 위치에 로그가 생겨
+        # 문제 진단 시 로그를 못 찾는 문제가 있었다.
+        logging.FileHandler(Path(__file__).parent / "run.log", encoding="utf-8"),
+    ],
 )
 log = logging.getLogger("main_loop")
 
