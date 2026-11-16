@@ -42,8 +42,17 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 SEQ_LEN = 60          # 과거 60분을 보고 다음 1분을 예측
 NEUTRAL_BAND = 0.0005  # 0.05% 이내 변동은 학습 라벨에서 제외 (노이즈 방지)
-PROB_BUY_MIN = 0.55    # 상승확률 55% 이상이면 BUY
-PROB_SELL_MAX = 0.45   # 상승확률 45% 이하면 SELL (=하락확률 55% 이상)
+
+# 실전 재학습에서 관찰된 val_accuracy가 대개 54~62% 수준(동전 던지기보다
+# 아주 조금 나은 정도)이라, 0.55/0.45처럼 느슨한 임계값에서는 모델이
+# "약간 오를 것 같다"고 한 거의 랜덤에 가까운 확률 차이로도 매번 BUY/SELL을
+# 쐈다. 그 결과 거래 건수가 다른 전략들(6~51건)보다 훨씬 많은 166건까지
+# 늘어났고, 3배 레버리지 하에서 "맞춰도 조금 벌고 틀리면 크게 잃는" 구조가
+# 반복돼 방향 적중률은 그럭저럭인데 실제 손익은 크게 마이너스가 나는
+# 괴리가 생겼다. 임계값을 0.60/0.40으로 높여서, 모델이 꽤 확신하는
+# (그래서 노이즈일 가능성이 더 낮은) 신호에서만 매매하도록 좁혔다.
+PROB_BUY_MIN = 0.60    # 상승확률 60% 이상이면 BUY (기존 0.55 -> 과매매/노이즈 매매 축소)
+PROB_SELL_MAX = 0.40   # 상승확률 40% 이하면 SELL (기존 0.45)
 
 FEATURE_COLS = ["ret", "vol_chg", "rsi14", "macd_hist", "bb_pctb"]
 N_FEATURES = len(FEATURE_COLS)
@@ -281,9 +290,9 @@ class LSTMStrategy:
 
     def signal_with_confidence(self, df: pd.DataFrame) -> tuple[str, float]:
         """prob_up이 0.5(완전 모호)에서 얼마나 멀리 떨어져 있는지를 확신도로
-        쓴다. 임계값(0.55/0.45)을 막 넘은 경우는 확신도가 낮고, 0.9나 0.1처럼
-        극단으로 갈수록 1.0에 가까워진다. main_loop.py가 이 값으로 베팅
-        크기를 정한다."""
+        쓴다. 임계값(PROB_BUY_MIN/PROB_SELL_MAX)을 막 넘은 경우는 확신도가
+        낮고, 0.9나 0.1처럼 극단으로 갈수록 1.0에 가까워진다. main_loop.py가
+        이 값으로 베팅 크기를 정한다."""
         if len(df) < self.min_bars():
             return "HOLD", 0.0
         prob_up = predict_proba(self.coin, df)
@@ -295,8 +304,8 @@ class LSTMStrategy:
             sig = "SELL"
         else:
             return "HOLD", 0.0
-        # 임계값(0.05만큼 0.5에서 떨어진 지점)부터 극단(0.5만큼 떨어진 지점,
-        # 즉 prob_up=1.0 또는 0.0)까지를 0~1로 선형 스케일.
+        # 임계값(0.5에서 threshold_distance만큼 떨어진 지점)부터 극단(0.5만큼
+        # 떨어진 지점, 즉 prob_up=1.0 또는 0.0)까지를 0~1로 선형 스케일.
         distance_from_mid = abs(prob_up - 0.5)
         threshold_distance = 0.5 - PROB_BUY_MIN  # = 0.05
         confidence = (distance_from_mid - threshold_distance) / (0.5 - threshold_distance)
