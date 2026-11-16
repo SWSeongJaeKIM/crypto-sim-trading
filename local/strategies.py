@@ -30,6 +30,11 @@ def rsi(series: pd.Series, period: int = 14) -> pd.Series:
     avg_loss = loss.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
     rs = avg_gain / avg_loss.replace(0, np.nan)
     out = 100 - (100 / (1 + rs))
+    # avg_loss == 0인 구간은 rs가 NaN이 되어 fillna(50.0)으로 "중립"이 되어버리지만,
+    # 실제로는 avg_gain > 0이면 극단적 과매수(RSI=100), avg_gain도 0이면 변동 없음(RSI=50)이다.
+    # (analysis_team 리포트 2026-11-16_1521_strategy.md 참고)
+    out = out.where(avg_loss != 0, 100.0)
+    out = out.where(~((avg_gain == 0) & (avg_loss == 0)), 50.0)
     return out.fillna(50.0)
 
 
