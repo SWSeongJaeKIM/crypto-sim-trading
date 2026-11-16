@@ -23,6 +23,8 @@ strategies.py의 전략 클래스와 동일한 인터페이스(signal(df) -> "BU
 
 from __future__ import annotations
 
+import json
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -31,6 +33,8 @@ import torch
 import torch.nn as nn
 
 from strategies import rsi, macd, bollinger
+
+log = logging.getLogger(__name__)
 
 MODEL_DIR = Path(__file__).parent / "models"
 MODEL_DIR.mkdir(exist_ok=True)
@@ -55,6 +59,14 @@ NEUTRAL_BAND = 0.0005  # 0.05% 이내 변동은 학습 라벨에서 제외 (노�
 # (그래서 노이즈일 가능성이 더 낮은) 신호에서만 매매하도록 좁혔다.
 PROB_BUY_MIN = 0.60    # 상승확률 60% 이상이면 BUY (기존 0.55 -> 과매매/노이즈 매매 축소)
 PROB_SELL_MAX = 0.40   # 상승확률 40% 이하면 SELL (기존 0.45)
+
+# 파인튠(이어학습) 후 val_accuracy가 이전 저장 모델보다 이 값(절대 비율) 이상
+# 떨어지면 저장을 건너뛰고 기존 가중치를 그대로 유지한다. 하루 10회 무인
+# 자동 재학습 루프에서 노이즈가 큰 구간을 학습해 성능이 떨어진 가중치가
+# 나와도 그대로 다음 추론(실거래 신호)에 쓰이는 걸 막기 위한 안전망.
+# 너무 낮게 잡으면 그냥 어려운 시장 상황이었던 정상적 재학습까지 막아
+# 가중치가 과거에 고착(stale)될 수 있어 보수적으로 0.03으로 시작.
+VAL_ACC_ROLLBACK_THRESHOLD = 0.03
 
 FEATURE_COLS = ["ret", "vol_chg", "rsi14", "macd_hist", "bb_pctb"]
 N_FEATURES = len(FEATURE_COLS)
@@ -217,18 +229,42 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
         val_pred = (torch.sigmoid(val_logits) > 0.5).float()
         val_acc = (val_pred == y_val_t).float().mean().item()
 
-    # 저장은 항상 CPU 텐서로 — GPU 없는 다른 PC/환경에서도 그대로
-    # load_state_dict가 가능하게 디바이스에 종속되지 않는 파일로 남긴다.
-    cpu_state = {k: v.cpu() for k, v in model.state_dict().items()}
-    torch.save(cpu_state, existing_path)
-    date_str = pd.Timestamp.now().strftime("%Y-%m-%d")
-    torch.save(cpu_state, HISTORY_DIR / f"{coin}_lstm_{date_str}.pt")
+    # 이전 저장 모델의 val_accuracy와 비교해, 이번 파인튠으로 성능이 크게
+    # 떨어졌으면 저장을 건너뛰고 기존 가중치를 그대로 유지한다 (아래
+    # VAL_ACC_ROLLBACK_THRESHOLD 설명 참고). 최초 학습(resumed_from_existing=False)
+    # 은 비교 대상(기존 가중치)이 없으므로 항상 저장한다.
+    meta_path = MODEL_DIR / f"{coin}_lstm_meta.json"
+    prev_val_acc = None
+    if resumed_from_existing and meta_path.exists():
+        try:
+            prev_val_acc = json.loads(meta_path.read_text()).get("val_accuracy")
+        except (json.JSONDecodeError, OSError):
+            prev_val_acc = None
 
-    _loaded_models.pop(coin, None)  # 추론 캐시 무효화 (다음 predict_proba가 새 가중치 로드)
+    should_save = True
+    skip_reason = None
+    if resumed_from_existing and prev_val_acc is not None and (prev_val_acc - val_acc) > VAL_ACC_ROLLBACK_THRESHOLD:
+        should_save = False
+        skip_reason = (f"val_acc 하락으로 롤백: 이전 {prev_val_acc:.4f} -> 이번 {val_acc:.4f} "
+                        f"(임계값 {VAL_ACC_ROLLBACK_THRESHOLD})")
+        log.warning(f"[{coin}] {skip_reason} — 기존 가중치 유지, 저장 생략")
+
+    if should_save:
+        # 저장은 항상 CPU 텐서로 — GPU 없는 다른 PC/환경에서도 그대로
+        # load_state_dict가 가능하게 디바이스에 종속되지 않는 파일로 남긴다.
+        cpu_state = {k: v.cpu() for k, v in model.state_dict().items()}
+        torch.save(cpu_state, existing_path)
+        date_str = pd.Timestamp.now().strftime("%Y-%m-%d")
+        torch.save(cpu_state, HISTORY_DIR / f"{coin}_lstm_{date_str}.pt")
+        meta_path.write_text(json.dumps({"val_accuracy": val_acc, "timestamp": timestamp}))
+
+        _loaded_models.pop(coin, None)  # 추론 캐시 무효화 (다음 predict_proba가 새 가중치 로드)
 
     return {
         "coin": coin,
         "trained": True,
+        "saved": should_save,
+        "reason": skip_reason or "",
         "finetuned": resumed_from_existing,
         "lr": lr,
         "effective_lr": effective_lr,
@@ -236,6 +272,7 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
         "n_train": len(X_train),
         "n_val": len(X_val),
         "val_accuracy": round(val_acc, 4),
+        "prev_val_accuracy": prev_val_acc,
         "epochs": epochs,
         "timestamp": timestamp,
         "data_start": data_start,
