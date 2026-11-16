@@ -107,6 +107,12 @@ CREATE INDEX IF NOT EXISTS idx_predictions_unresolved ON predictions(resolved);
 def connect(db_path: Path | str = DB_PATH):
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
+    # main_loop(1분마다 쓰기)와 dashboard(주기적으로 읽기)가 동시에 같은 DB
+    # 파일을 열기 때문에, 기본 journal_mode로는 "database is locked" 에러가
+    # 날 수 있다. WAL 모드는 읽기/쓰기가 서로 거의 블로킹하지 않게 해주고,
+    # busy_timeout은 그래도 충돌하면 에러 던지기 전에 잠깐 재시도 대기한다.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     try:
         conn.executescript(SCHEMA)
         yield conn

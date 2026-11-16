@@ -50,7 +50,13 @@ def _http_get_json(url: str, timeout: int = 10, retries: int = 3) -> dict | list
             req = urllib.request.Request(url, headers={"User-Agent": "crypto-sim-local/1.0"})
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as e:
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError,
+                json.JSONDecodeError, UnicodeDecodeError) as e:
+            # JSONDecodeError/UnicodeDecodeError: Upbit이 손상되거나 빈 응답,
+            # 혹은 HTML 에러 페이지를 반환하는 경우가 드물게 있는데, 예전에는
+            # 이 두 예외가 여기서 안 잡혀서 재시도 없이 바로 호출부까지
+            # 전파되며 프로그램이 죽을 수 있었다. 다른 네트워크 에러와 동일하게
+            # 재시도 대상으로 묶는다.
             last_err = e
             time.sleep(1.0 * (attempt + 1))
     raise FetchError(f"GET failed after {retries} retries: {url} ({last_err})")

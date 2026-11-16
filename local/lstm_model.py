@@ -66,18 +66,25 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_dataset(df: pd.DataFrame, seq_len: int = SEQ_LEN) -> tuple[np.ndarray, np.ndarray]:
-    """시퀀스(X) / 라벨(y) 생성. y: 1=다음캔들상승, 0=하락 (중립구간은 제외)."""
+    """시퀀스(X) / 라벨(y) 생성. y: 1=다음캔들상승, 0=하락 (중립구간은 제외).
+
+    시퀀스는 시점 i를 "마지막으로 아는 시점"으로 포함해서(arr[i-seq_len+1:i+1])
+    i->i+1로의 변화를 예측하도록 만든다. predict_proba()의 추론 입력
+    (feat[-seq_len:], 즉 마지막 알려진 시점까지 포함한 윈도우로 그 다음을
+    예측)과 정의를 맞추기 위함 — 이전에는 시퀀스가 i-1까지만 포함해서
+    (arr[i-seq_len:i]) 학습 시 시퀀스 끝과 라벨 사이에 1개 캔들 간극이
+    있었고, 그 결과 모델이 실제 운용 때와 다른 과제로 학습되고 있었다."""
     feat = build_features(df)
     close = df["close"].to_numpy()
     arr = feat.to_numpy(dtype=np.float32)
 
     xs, ys = [], []
     n = len(df)
-    for i in range(seq_len, n - 1):
+    for i in range(seq_len - 1, n - 1):
         next_ret = (close[i + 1] - close[i]) / close[i]
         if abs(next_ret) < NEUTRAL_BAND:
             continue
-        xs.append(arr[i - seq_len: i])
+        xs.append(arr[i - seq_len + 1: i + 1])
         ys.append(1 if next_ret > 0 else 0)
 
     if not xs:
