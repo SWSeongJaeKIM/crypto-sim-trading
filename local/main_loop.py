@@ -383,7 +383,20 @@ def retrain_lstm() -> None:
             set_progress("training", f"{_coin} 모델 학습 중... epoch {epoch_idx}/{total_epochs}",
                          current_coin=_coin, coin_index=_i, coin_total=len(history), train_step="fitting")
 
-        r = lstm_model.train_model(coin, df, epochs=8, history_days=HISTORY_DAYS_FOR_TRAIN, on_epoch=_on_epoch)
+        try:
+            r = lstm_model.train_model(coin, df, epochs=8, history_days=HISTORY_DAYS_FOR_TRAIN, on_epoch=_on_epoch)
+        except Exception as e:
+            # 한 코인 학습 실패가 이번 슬롯 전체(retrain_lstm() 전체 예외 전파 ->
+            # last_retrain_at 미갱신 -> 다음 사이클에 90일 데이터 재수집+전체 재학습
+            # 반복)로 번지지 않도록 코인 단위로 격리한다. run_one_cycle()의
+            # 전략/코인 단위 예외 격리(analysis_team 리포트 2026-11-16_1422)와 동일한 패턴.
+            log.exception(f"[retrain/{coin}] 학습 중 에러, 이 코인만 이번 슬롯 건너뜀: {e}")
+            r = {
+                "coin": coin,
+                "trained": False,
+                "reason": f"exception: {e}",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
         results.append(r)
         log.info(f"  {r}")
         # 학습할 때마다 누적 기록 (덮어쓰지 않음) — 대시보드에서 정확도 추이를 보기 위함
