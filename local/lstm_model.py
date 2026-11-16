@@ -15,7 +15,9 @@ strategies.py의 전략 클래스와 동일한 인터페이스(signal(df) -> "BU
   PROB_SELL_MAX 이하면 SELL, 그 사이는 HOLD (조건식처럼 신호를 내도록 임계값으로 변환)
 
 학습(train_model)과 추론(predict_proba / signal)을 분리:
-- 학습은 하루 1회(메인 루프가 호출)만 돌리고 디스크에 모델 파일로 저장
+- 학습은 메인 루프(main_loop.py의 RETRAIN_TIMES_LOCAL)가 하루 10회(약 2시간24분
+  간격) 호출하며, 매 호출마다 최근 HISTORY_DAYS_FOR_TRAIN(90)일치 1분봉으로
+  파인튠한 뒤 디스크에 모델 파일로 저장
 - 추론(1분마다)은 저장된 가중치를 로드해서 forward pass만 수행 (가벼움, CPU로 충분)
 """
 
@@ -33,7 +35,7 @@ from strategies import rsi, macd, bollinger
 MODEL_DIR = Path(__file__).parent / "models"
 MODEL_DIR.mkdir(exist_ok=True)
 
-# GPU(CUDA)가 있으면 학습에 사용 — 30일치 데이터(코인당 약 4만 샘플) x 6코인
+# GPU(CUDA)가 있으면 학습에 사용 — 90일치 데이터(코인당 약 13만 샘플) x 6코인
 # x 8epoch이라 느린 PC에서는 체감 차이가 크다. 없으면 자동으로 CPU로
 # 폴백하므로 이 모듈은 GPU 유무와 상관없이 그대로 동작한다. 추론
 # (predict_proba, 매분 호출)은 forward pass 한 번뿐이라 원래부터 CPU로도
