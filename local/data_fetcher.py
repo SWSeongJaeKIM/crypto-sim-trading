@@ -172,8 +172,13 @@ def fetch_minute_history(market: str, days: int = 14, sleep_sec: float = 0.12,
         if new_to_param == prev_to_param:
             stuck_count += 1
             if stuck_count >= 3:
-                print(f"[WARN] {market} 페이지네이션이 {new_to_param} 시점에서 "
-                      f"전진하지 않아 중단 (수집된 {len(all_rows)}개로 계속)")
+                # 과거엔 print()만 썼는데, main_loop.py의 logging.basicConfig는
+                # print() 출력을 전혀 거치지 않아 이 경고가 run.log에는 안 남고
+                # 콘솔에만 찍혔다(analysis_team 리포트 2026-11-16_1619_execution.md).
+                # 콘솔 없이 서비스로 상주 실행 중이면 이 경고를 영영 못 보게 되므로
+                # log.warning으로 교체해 run.log에도 남긴다.
+                log.warning(f"{market} 페이지네이션이 {new_to_param} 시점에서 "
+                            f"전진하지 않아 중단 (수집된 {len(all_rows)}개로 계속)")
                 break
         else:
             stuck_count = 0
@@ -185,8 +190,9 @@ def fetch_minute_history(market: str, days: int = 14, sleep_sec: float = 0.12,
         if rate_limiter is None:
             time.sleep(sleep_sec)
     else:
-        print(f"[WARN] {market} 수집이 max_pages({max_pages})에 도달해 중단됨 "
-              f"(목표 {days}일 중 일부만 수집됐을 수 있음)")
+        # 위와 동일한 이유로 log.warning 사용 (run.log에 남기기 위함).
+        log.warning(f"{market} 수집이 max_pages({max_pages})에 도달해 중단됨 "
+                    f"(목표 {days}일 중 일부만 수집됐을 수 있음)")
 
     if not all_rows:
         return pd.DataFrame(columns=["open_time", "open", "high", "low", "close", "volume"])
@@ -256,8 +262,10 @@ def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=Non
             # "멈춘 건지 그냥 느린 건지"는 바로 구분할 수 있게 한다.
             if page_idx % 10 == 0 or page_idx == 1:
                 with print_lock:
-                    print(f"  [{_coin}] 페이지 {page_idx}/~{expected_pages} 수집 중... "
-                          f"(누적 {rows_so_far}개, 가장 오래된 시점 {oldest_time})")
+                    # 다른 경고들과 패턴을 맞춰 log.info로 — run.log에서 진행상황을
+                    # 그대로 확인할 수 있게 한다 (analysis_team 2026-11-16_1619_execution.md).
+                    log.info(f"[{_coin}] 페이지 {page_idx}/~{expected_pages} 수집 중... "
+                             f"(누적 {rows_so_far}개, 가장 오래된 시점 {oldest_time})")
                     if on_progress:
                         on_progress(_coin, _i, len(COINS))
 
@@ -268,7 +276,7 @@ def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=Non
             if cache and len(df):
                 df.to_csv(cache_path, index=False)
             with print_lock:
-                print(f"[{coin}] {len(df)}개 1분봉 수집 완료")
+                log.info(f"[{coin}] {len(df)}개 1분봉 수집 완료")
             return coin, df
         except Exception as e:
             # 위 _fetch_one과 같은 이유로 FetchError만이 아니라 모든 예외를 잡는다.
