@@ -1,47 +1,47 @@
 {
-  "generated_at": "2026-11-15_2318",
+  "generated_at": "2026-11-16_0022",
   "roles": {
     "execution": {
       "role": "execution",
       "role_label": "실행/버그 분석가",
-      "timestamp": "2026-11-15_2318",
-      "path": "analysis_team/reports/2026-11-15_2318_execution.md",
-      "summary": "전체적인 예외처리 구조는 \"사이클 단위로 감싸서 다음 사이클에 재시도\"하는 합리적인 패턴이나, 로깅과 예외 포착 범위에 몇 가지 구체적 구멍이 있어 \"왜 멈췄는지\"를 진단하기 어려운 상황이 생길 수 있다."
+      "timestamp": "2026-11-16_0022",
+      "path": "analysis_team/reports/2026-11-16_0022_execution.md",
+      "summary": "전체적인 예외처리 골격(사이클 단위 try/except, 캔들 수집 실패 시 스킵)은 잘 잡혀 있으나, 전략/코인 단위로 세분화되지 않아 하나의 전략 오류가 해당 사이클의 나머지 전략들까지 함께 날려버릴 수 있고, data_fetcher의 일부 경고 로그가 파일 로그에 남지 않는 점이 "
     },
     "lstm": {
       "role": "lstm",
       "role_label": "LSTM 분석가",
-      "timestamp": "2026-11-15_2318",
-      "path": "analysis_team/reports/2026-11-15_2318_lstm.md",
-      "summary": "LSTM 파이프라인은 데이터 양·재학습 주기·모델 용량 측면에서 전반적으로 무리 없게 설계되어 있으나, train/val 분할 방식 때문에 검증 정확도(`val_accuracy`)가 실제보다 낙관적으로 보일 수 있는 구조적 문제가 가장 시급하다."
+      "timestamp": "2026-11-16_0022",
+      "path": "analysis_team/reports/2026-11-16_0022_lstm.md",
+      "summary": "피처·구조·재학습 주기 설계는 전반적으로 합리적이나, 단일 코인 자기 피처에만 의존한 데이터 범위, train/val 분할의 미세 누수, 파인튜닝 시 성능 저하를 막을 안전장치 부재가 개선 여지로 보인다."
     },
     "risk": {
       "role": "risk",
       "role_label": "리스크 분석가",
-      "timestamp": "2026-11-15_2318",
-      "path": "analysis_team/reports/2026-11-15_2318_risk.md",
-      "summary": "손실 중인 포지션에 계속 베팅하는 것을 막는 장치가 전무하고, 코인 6개 균등 배분이 변동성 차이를 반영하지 않는 점이 가장 큰 구조적 리스크이며, 코인별 자금 격리 설계 자체는 잘 되어 있다."
+      "timestamp": "2026-11-16_0022",
+      "path": "analysis_team/reports/2026-11-16_0022_risk.md",
+      "summary": "자금 집중 리스크는 코인별 슬롯 격리 구조로 포트폴리오 레벨에서 이미 상당히 제한돼 있으나, 1분 주기(CYCLE_INTERVAL_SEC=60)와 TRADE_FRACTION(0.2~0.9)의 조합이 슬롯 내부에서는 예상보다 빠르게 자금을 소진시킬 수 있고, 리스크조정 지표와 리셋 이벤트"
     },
     "storage": {
       "role": "storage",
       "role_label": "데이터/저장소 분석가",
-      "timestamp": "2026-11-15_2318",
-      "path": "analysis_team/reports/2026-11-15_2318_storage.md",
-      "summary": "스키마와 인덱스 설계는 쿼리 패턴에 잘 맞게 되어 있으나, `connect()`의 커밋 시점이 main_loop 전체를 감싸는 단일 트랜잭션에 묶여 있어 \"거래가 기록은 되지만 커밋은 안 되는\" 심각한 데이터 유실/가시성 문제가 있다."
+      "timestamp": "2026-11-16_0022",
+      "path": "analysis_team/reports/2026-11-16_0022_storage.md",
+      "summary": "스키마/인덱스 설계는 쿼리 패턴에 잘 맞지만, main_loop.py가 전체 실행 기간 동안 커밋을 한 번도 하지 않는 구조라 대시보드가 사실상 멈춘 데이터를 보고 비정상 종료 시 데이터가 통째로 사라질 위험이 가장 중요한 문제다."
     },
     "strategy": {
       "role": "strategy",
       "role_label": "전략 분석가",
-      "timestamp": "2026-11-15_2318",
-      "path": "analysis_team/reports/2026-11-15_2318_strategy.md",
-      "summary": "4개 전략의 큰 틀(진입/청산 로직)은 타당하지만, 공통 `rsi()` 헬퍼에 급등장에서 오작동하는 구체적 버그가 있고, 4개 중 3개가 사실상 같은 \"추세추종\" 계열이라 분산 효과가 제한적이다."
+      "timestamp": "2026-11-16_0022",
+      "path": "analysis_team/reports/2026-11-16_0022_strategy.md",
+      "summary": "네 조건식의 진입 로직 자체는 논리적으로 타당하지만, RSI 0-division 처리 버그, 일봉 표준 파라미터의 무비판적 사용, 거래량 미반영, ma_cross_rsi·macd_momentum 간 높은 상관관계라는 네 가지 구조적 약점이 있다."
     },
     "synthesizer": {
       "role": "synthesizer",
       "role_label": "종합 조정자",
-      "timestamp": "2026-11-15_2318",
-      "path": "analysis_team/reports/2026-11-15_2318_synthesizer.md",
-      "summary": "**1. (storage) DB 커밋 시점 분리** — `storage.py`의 `connect()`가 `main_loop.py`의 전체 매매 루프를 감싸는 `with` 블록이 끝날 때만 커밋되어, 비정상 종료 시 거래/스냅샷/학습 기록 전체가 유실되고 대시보드도 최신 데이터를 못 본다"
+      "timestamp": "2026-11-16_0022",
+      "path": "analysis_team/reports/2026-11-16_0022_synthesizer.md",
+      "summary": "**1. (storage) 사이클 단위 커밋 추가** — `run_one_cycle()`과 `retrain_lstm()` 끝에 `conn.commit()`을 넣고 `PRAGMA journal_mode=WAL`, `busy_timeout=5000`을 설정. 현재 `with storage."
     }
   }
 }
