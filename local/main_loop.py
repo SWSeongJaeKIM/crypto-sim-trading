@@ -495,6 +495,7 @@ def main():
     log.info(f"LSTM 재학습 스케줄: 매일 {', '.join(f'{h:02d}:{m:02d}' for h, m in RETRAIN_TIMES_LOCAL)} (하루 {len(RETRAIN_TIMES_LOCAL)}회)")
 
     while not _stop:
+        _cycle_started = time.monotonic()  # 이번 사이클(수집+매매, 필요시 재학습) 소요시간 측정용
         try:
             with storage.connect() as conn:
                 run_one_cycle(conn)
@@ -521,10 +522,21 @@ def main():
         analysis_left = _fmt_remaining(time_until_next_cloud_analysis())
         log.info(f"다음 LSTM 재학습까지 {retrain_left} | 다음 클라우드 분석팀 실행까지 {analysis_left}")
 
-        for _ in range(CYCLE_INTERVAL_SEC):
+        # 고정 "60번 sleep(1)"이었을 때는 실제 주기가 "이번 사이클 작업시간(수집+매매,
+        # 필요시 재학습) + 60초"가 되어, 평균 처리시간이 몇 초만 돼도 하루 1440사이클
+        # 누적 시 분~시간 단위로 벌어졌다(사이클이 죽는 건 아니고 서서히 밀리는 것).
+        # 이번 사이클 시작부터 지금까지 걸린 시간만큼 빼서 60초 주기에 맞춘다 —
+        # 재학습이 섞인 사이클처럼 이미 60초를 넘겼으면 남는 시간이 0이라 바로 다음
+        # 사이클로 넘어간다 (analysis_team execution 리포트 2026-11-16_1718 제안).
+        _elapsed = time.monotonic() - _cycle_started
+        _sleep_remaining = max(0.0, CYCLE_INTERVAL_SEC - _elapsed)
+        _slept = 0.0
+        while _slept < _sleep_remaining:
             if _stop:
                 break
-            time.sleep(1)
+            chunk = min(1.0, _sleep_remaining - _slept)
+            time.sleep(chunk)
+            _slept += chunk
 
     log.info("=== 루프 정상 종료 ===")
 
