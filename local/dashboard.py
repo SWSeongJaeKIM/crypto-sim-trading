@@ -386,11 +386,28 @@ async function load() {
 
   const p = d.progress || {};
   const dot = document.getElementById('progress-dot');
-  dot.className = 'dot dot-' + (p.stage || 'idle');
   const stageLabel = {idle:'대기 중', collecting:'데이터 수집 중', cycle_running:'매매 사이클 실행 중',
                       training:'LSTM 학습 중', sleeping:'대기 중', error:'에러'}[p.stage] || p.stage || '알수없음';
+  // progress.updated_at은 main_loop.py가 set_progress()를 호출할 때마다
+  // 찍히는 시각 — watchdog.bat가 보는 heartbeat.txt와 같은 순간에 갱신되는
+  // 값이라, 여기서 "몇 분 전"을 보여주면 워치독이 멈춤으로 판단하기 전에
+  // 사람도 눈으로 먼저 알아챌 수 있다.
+  let ageLabel = '';
+  let staleWarning = false;
+  if (p.updated_at) {
+    const ageSec = (Date.now() - new Date(p.updated_at).getTime()) / 1000;
+    if (ageSec < 90) {
+      ageLabel = `${Math.round(ageSec)}초 전`;
+    } else {
+      const ageMin = Math.round(ageSec / 60);
+      ageLabel = `${ageMin}분 전`;
+      if (ageMin >= 5) staleWarning = true;  // watchdog.bat의 STALE_MINUTES(기본 5분)와 동일 기준
+    }
+  }
+  dot.className = 'dot dot-' + (staleWarning ? 'error' : (p.stage || 'idle'));
   document.getElementById('progress-text').innerText =
-    `[${stageLabel}] ${p.detail || ''}` + (p.updated_at ? ` (${p.updated_at.slice(11,19)})` : '');
+    `[${stageLabel}] ${p.detail || ''}` + (ageLabel ? ` (${ageLabel})` : '') +
+    (staleWarning ? ' ⚠ 응답 없음 — 멈췄을 수 있음 (watchdog 사용 시 자동 재시작됨)' : '');
 
   function renderCards(containerId, mode) {
     const container = document.getElementById(containerId);

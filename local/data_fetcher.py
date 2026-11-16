@@ -165,19 +165,25 @@ def fetch_all_latest_candles(count: int = 200) -> dict[str, pd.DataFrame]:
 
 def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=None) -> dict[str, pd.DataFrame]:
     """6대 코인의 최근 N일 1분봉 전체 (LSTM 학습/재학습 시 호출). 디스크 캐시 지원.
-    on_progress(coin, index, total): 코인 하나 수집 시작할 때마다 호출 (대시보드 진행표시용, 선택)."""
+    on_progress(coin, index, total): 코인 하나 수집 시작할 때마다 호출 (대시보드 진행표시용, 선택).
+    매 페이지(약 1~2초 간격)에도 같은 콜백을 호출한다 — 이 수집 단계가 가장
+    오래 걸릴 수 있는 구간이라, 워치독용 하트비트가 "코인이 바뀔 때만"이
+    아니라 그 안에서도 계속 찍혀야 "진짜 멈춤"과 "원래 느림"을 구분할 수
+    있다 (main_loop.py의 set_progress가 이 콜백 안에서 하트비트를 남긴다)."""
     expected_pages = int(days * 1440 / 200)
     result: dict[str, pd.DataFrame] = {}
     for i, coin in enumerate(COINS, start=1):
         if on_progress:
             on_progress(coin, i, len(COINS))
 
-        def _on_page(page_idx, oldest_time, rows_so_far, _coin=coin):
+        def _on_page(page_idx, oldest_time, rows_so_far, _coin=coin, _i=i):
             # 10페이지마다(약 1~2초 간격) 한 번씩만 찍어서 로그 폭주를 막되,
             # "멈춘 건지 그냥 느린 건지"는 바로 구분할 수 있게 한다.
             if page_idx % 10 == 0 or page_idx == 1:
                 print(f"  [{_coin}] 페이지 {page_idx}/~{expected_pages} 수집 중... "
                       f"(누적 {rows_so_far}개, 가장 오래된 시점 {oldest_time})")
+                if on_progress:
+                    on_progress(_coin, _i, len(COINS))
 
         cache_path = DATA_DIR / f"{coin}_1m_{days}d.csv"
         try:

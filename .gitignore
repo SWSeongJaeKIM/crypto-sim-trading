@@ -1,0 +1,11 @@
+# PC에서 실행 중 생성되는 로컬 상태 파일들 — 커밋 대상 아님
+local/run.log
+local/heartbeat.txt
+local/trading.db
+local/trading.db-wal
+local/trading.db-shm
+local/models/
+local/data_cache/
+
+__pycache__/
+*.pyc

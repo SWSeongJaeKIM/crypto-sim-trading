@@ -27,6 +27,7 @@ import signal
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pandas as pd
 
@@ -70,9 +71,25 @@ signal.signal(signal.SIGINT, _handle_sigint)
 signal.signal(signal.SIGTERM, _handle_sigint)
 
 
+HEARTBEAT_PATH = Path(__file__).parent / "heartbeat.txt"
+
+
+def _touch_heartbeat() -> None:
+    """watchdog.bat가 "멈췄는지"를 판단하는 유일한 근거. SQLite를 매번 열어
+    파싱하는 대신, 파일 하나의 수정시각(mtime)만 보면 되게 가장 가벼운
+    방식으로 분리했다. set_progress()가 상태 전환마다, 그리고 데이터 수집처럼
+    오래 걸리는 단계 중간(fetch_all_minute_history의 on_progress 콜백)에도
+    호출돼서, "원래 오래 걸리는 중"과 "진짜로 멈춤"을 구분할 수 있게 한다."""
+    try:
+        HEARTBEAT_PATH.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+    except OSError:
+        pass  # 하트비트 파일 쓰기 실패는 워치독만 못 믿게 할 뿐, 매매 자체는 막지 않는다
+
+
 def set_progress(conn, stage: str, detail: str = "", **extra) -> None:
     """대시보드가 보여줄 '지금 뭐 하고 있는지' 상태. 매 단계 전환마다 갱신.
     stage: idle | collecting | training | cycle_running | sleeping | error"""
+    _touch_heartbeat()
     storage.set_meta(conn, "progress", {
         "stage": stage,
         "detail": detail,
@@ -308,7 +325,12 @@ def retrain_lstm(conn) -> None:
     for i, (coin, df) in enumerate(history.items(), start=1):
         set_progress(conn, "training", f"{coin} 모델 학습 중... ({i}/{len(history)})",
                      current_coin=coin, coin_index=i, coin_total=len(history), train_step="fitting")
-        r = lstm_model.train_model(coin, df, epochs=8, history_days=HISTORY_DAYS_FOR_TRAIN)
+
+        def _on_epoch(_coin, epoch_idx, total_epochs, _i=i):
+            set_progress(conn, "training", f"{_coin} 모델 학습 중... epoch {epoch_idx}/{total_epochs}",
+                         current_coin=_coin, coin_index=_i, coin_total=len(history), train_step="fitting")
+
+        r = lstm_model.train_model(coin, df, epochs=8, history_days=HISTORY_DAYS_FOR_TRAIN, on_epoch=_on_epoch)
         results.append(r)
         log.info(f"  {r}")
         # 학습할 때마다 누적 기록 (덮어쓰지 않음) — 대시보드에서 정확도 추이를 보기 위함

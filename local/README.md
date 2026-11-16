@@ -148,7 +148,7 @@ GPU 없어도 된다 (CPU로 충분 — LSTM이 아주 작은 모델이라 1분 
 터미널 2개를 띄운다 (또는 백그라운드로):
 
 ```bash
-# 터미널 1: 매매 엔진 (계속 실행)
+# 터미널 1: 매매 엔진 (계속 실행) — Windows는 watchdog.bat 사용 권장, 아래 참고
 python3 main_loop.py
 
 # 터미널 2: 대시보드
@@ -162,6 +162,29 @@ python3 dashboard.py
   끝나고 정지).
 - 대시보드: `http://localhost:5000`. 같은 와이파이의 폰에서 보려면
   PC의 사설 IP:5000 (Windows `ipconfig`, Mac `ipconfig getifaddr en0`로 확인).
+
+### 워치독 (Windows) — 멈추면 자동 재시작
+
+`python3 main_loop.py`를 직접 켜는 대신 `watchdog.bat`를 실행하면, 뒤에서
+`main_loop.py`를 감시하다가 다음 두 경우에 **자동으로 강제 재시작**한다:
+
+- `main_loop.py` 프로세스 자체가 죽은 경우 (예외로 꺼짐 등)
+- 프로세스는 살아있지만 **멈춘(행) 경우** — `main_loop.py`가 매 사이클/학습
+  단계마다 `heartbeat.txt` 파일에 "방금 살아있었다"는 시각을 기록하는데,
+  이 파일이 5분 이상 안 바뀌면 "멈췄다"고 판단한다.
+
+```
+watchdog.bat 더블클릭 (또는 cmd에서 실행)
+```
+
+- `watchdog.bat`가 `main_loop.py`를 최소화된 창으로 띄우고 30초마다 상태를
+  확인한다. 끄려면 watchdog 창을 닫거나 Ctrl+C (연 main_loop 창도 따로
+  닫아야 완전 종료된다).
+- 감시 주기/임계값을 바꾸려면 `watchdog.bat` 상단의 `STALE_MINUTES`,
+  `CHECK_INTERVAL_SEC` 값을 수정.
+- Mac/Linux는 `watchdog.bat`를 쓸 수 없으니, 같은 역할을 하려면 셸 스크립트로
+  `heartbeat.txt`의 mtime을 확인하는 방식으로 직접 만들거나 `systemd`의
+  `Restart=on-failure` + `WatchdogSec` 조합을 쓰면 된다 (요청 시 만들어 줄 수 있음).
 
 ## 24시간 계속 돌리기
 

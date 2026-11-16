@@ -110,7 +110,8 @@ HISTORY_DIR.mkdir(exist_ok=True, parents=True)
 
 def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 256,
                  lr: float = 1e-3, seq_len: int = SEQ_LEN, val_frac: float = 0.15,
-                 finetune: bool = True, history_days: int | None = None) -> dict:
+                 finetune: bool = True, history_days: int | None = None,
+                 on_epoch=None) -> dict:
     """한 코인에 대해 LSTM을 학습(또는 파인튜닝)하고 모델 파일로 저장.
 
     finetune=True(기본): 기존 저장된 가중치가 있으면 그걸 불러와 이어서 학습
@@ -165,6 +166,11 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
             loss = loss_fn(logits, y_train_t[idx])
             loss.backward()
             opt.step()
+        if on_epoch:
+            # 느린 PC에서 데이터량이 커져(30일치) 코인당 학습이 오래 걸릴 때,
+            # 워치독(watchdog.bat)의 하트비트가 코인 단위로만 찍히면 간극이
+            # 너무 벌어질 수 있어 epoch 단위로도 찍을 수 있게 콜백을 열어둔다.
+            on_epoch(coin, epoch + 1, epochs)
 
     model.eval()
     with torch.no_grad():
