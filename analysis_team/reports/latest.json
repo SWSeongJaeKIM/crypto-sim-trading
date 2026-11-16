@@ -1,47 +1,47 @@
 {
-  "generated_at": "2026-11-16_0618",
+  "generated_at": "2026-11-16_0719",
   "roles": {
     "execution": {
       "role": "execution",
       "role_label": "실행/버그 분석가",
-      "timestamp": "2026-11-16_0618",
-      "path": "analysis_team/reports/2026-11-16_0618_execution.md",
-      "summary": "전체적으로 예외처리와 재시작 복원력은 양호하나, 로깅 경로 불일치와 사이클 타이밍 드리프트, LSTM 모델 부분 누락 시의 복구 로직에 개선 여지가 있다."
+      "timestamp": "2026-11-16_0719",
+      "path": "analysis_team/reports/2026-11-16_0719_execution.md",
+      "summary": "직전(06:18) 리포트에서 지적한 로깅 경로 불일치와 사이클 타이밍 드리프트는 코드 변경 없이 그대로 남아 있고, 추가로 `run_one_cycle`의 예외처리 범위가 전략 단위로 분리되어 있지 않아 한 전략의 오류가 나머지 전략까지 모두 스킵시키는 구조적 위험을 새로 발견했다."
     },
     "lstm": {
       "role": "lstm",
       "role_label": "LSTM 분석가",
-      "timestamp": "2026-11-16_0618",
-      "path": "analysis_team/reports/2026-11-16_0618_lstm.md",
-      "summary": "피처·구조·검증 분할 방식은 1분봉 예측이라는 어려운 과제에 맞게 무리 없이 설계되어 있으나, \"재학습 결과를 검증 없이 그대로 덮어쓰는 구조\"와 \"파인튜닝이 사실상 거의 동일한 30일 윈도우의 반복 재학습이 되는 구조\" 두 가지는 코드 구조만으로도 확인되는 개선 포인트다."
+      "timestamp": "2026-11-16_0719",
+      "path": "analysis_team/reports/2026-11-16_0719_lstm.md",
+      "summary": "피처/모델 규모 자체는 데이터 양에 비해 과하지 않게 균형이 잡혀 있으나, 매일 반복되는 파인튜닝에 \"성능 저하 방지\" 안전장치가 전혀 없고 ret/vol_chg 피처가 정규화되지 않은 점이 가장 먼저 손봐야 할 부분이다."
     },
     "risk": {
       "role": "risk",
       "role_label": "리스크 분석가",
-      "timestamp": "2026-11-16_0618",
-      "path": "analysis_team/reports/2026-11-16_0618_risk.md",
-      "summary": "고정 50% 베팅은 이미 확신도 기반 가변 비율(20~90%)로 개선되어 있으나, 최대 베팅 비율(90%)의 집중도, 손실 중 평단가 추가(물타기) 제어 부재, 코인 간 변동성 미반영 배분이 구조적 리스크로 남아있다."
+      "timestamp": "2026-11-16_0719",
+      "path": "analysis_team/reports/2026-11-16_0719_risk.md",
+      "summary": "자금 집중도(베팅 비율)는 \"50%\"보다 더 공격적으로 실제 작동하며, 가장 큰 구조적 공백은 손실 중에도 신호만으로 계속 추가매수(물타기)가 가능하다는 점이다."
     },
     "storage": {
       "role": "storage",
       "role_label": "데이터/저장소 분석가",
-      "timestamp": "2026-11-16_0618",
-      "path": "analysis_team/reports/2026-11-16_0618_storage.md",
-      "summary": "스키마와 인덱스는 대체로 쿼리 패턴에 맞게 설계되어 있으나, predictions 테이블의 무제한 누적과 WAL 미설정으로 인한 동시성 리스크가 가장 중요한 개선 포인트다."
+      "timestamp": "2026-11-16_0719",
+      "path": "analysis_team/reports/2026-11-16_0719_storage.md",
+      "summary": "스키마/인덱스 자체는 대체로 적절하지만, main_loop.py가 전체 수명 동안 커밋 없이 하나의 트랜잭션만 쓰는 구조가 가장 심각한 문제이며, predictions 무제한 누적과 portfolios 키 네이밍도 개선 여지가 있다."
     },
     "strategy": {
       "role": "strategy",
       "role_label": "전략 분석가",
-      "timestamp": "2026-11-16_0618",
-      "path": "analysis_team/reports/2026-11-16_0618_strategy.md",
-      "summary": "rsi() 함수의 0-나누기 방지 로직에 방향성 버그가 있어 급등 구간에서 과매수 보호 필터가 무력화될 수 있다는 점이 가장 중요한 발견이며, 그 외에는 전략 로직 자체는 대체로 타당하나 일부 파라미터가 일봉 표준값을 그대로 쓰고 있고 거래량을 전혀 참조하지 않는다."
+      "timestamp": "2026-11-16_0719",
+      "path": "analysis_team/reports/2026-11-16_0719_strategy.md",
+      "summary": "4개 조건식의 진입/청산 로직 자체는 각각 타당하지만, RSI 계산 함수에 극단적 추세 구간에서 생기는 실질적 버그가 있고, `ma_cross_rsi`와 `macd_momentum`이 같은 26기간 이동평균을 공유해 사실상 같은 신호를 내며, 파라미터는 1분봉 전용 조정 없이 일봉 표준"
     },
     "synthesizer": {
       "role": "synthesizer",
       "role_label": "종합 조정자",
-      "timestamp": "2026-11-16_0618",
-      "path": "analysis_team/reports/2026-11-16_0618_synthesizer.md",
-      "summary": "1. **rsi() 0-나누기 방지 로직의 비대칭 버그 수정** (strategy, strategies.py line 25-33)"
+      "timestamp": "2026-11-16_0719",
+      "path": "analysis_team/reports/2026-11-16_0719_synthesizer.md",
+      "summary": "1. **main_loop.py 트랜잭션 분리 (storage 제안)** — storage.py의 connect()는 with 블록 종료 시에만 commit하는데, main_loop.py가 이 커넥션을 while 무한루프 전체에 걸쳐 그대로 쓰고 있어 사실상 프로세스 수명 전체가 하나의"
     }
   }
 }
