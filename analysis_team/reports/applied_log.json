@@ -110,5 +110,117 @@
     "decision": "skipped",
     "reason": "snapshots 테이블에 새 컬럼을 추가해야 하는 스키마 변경이라 '운영 중단/데이터 변환 필요' 제외 기준에 해당하고, 리포트 스스로 '실효성은 실제 운영 데이터를 봐야 판단 가능'이라고 명시함.",
     "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1325",
+    "proposal": "_fetch_one(fetch_all_latest_candles/fetch_all_minute_history)의 except FetchError를 except Exception으로 넓히고 print를 logging.exception으로 교체해, 코인 1개의 비-FetchError 예외(예: Upbit 응답 형식 변경으로 인한 KeyError)가 ThreadPoolExecutor를 통해 전파되어 6코인 전체 수집을 실패시키는 것을 막음",
+    "role": "execution (synthesizer Top3 #2)",
+    "decision": "applied",
+    "reason": "명백한 예외처리 범위 누락 버그 수정이며 매매 판단 로직과는 무관함. 기존에도 캐시 폴백 등 FetchError 처리 분기가 있어 Exception으로 넓혀도 동일한 폴백 경로를 그대로 타고, 스택트레이스는 logging.exception으로 남겨 버그를 숨기지 않도록 함(리포트가 명시한 필수조건). 몽키패치 시뮬레이션으로 BTC만 KeyError를 던져도 나머지 5개 코인은 정상 수집되고 트레이스백이 로그로 남는 것을 확인함.",
+    "commit": "7a0b664db4cf4e51ca7510254f7322a2919273e7"
+  },
+  {
+    "timestamp": "2026-11-16_1325",
+    "proposal": "storage.py에 idx_trades_timestamp(timestamp DESC) 인덱스를 추가해, dashboard.py가 매 새로고침마다 strategy 필터 없이 호출하는 recent_trades(strategy=None) 경로가 idx_trades_strategy를 못 쓰고 전체 스캔하는 문제를 해소",
+    "role": "storage (synthesizer Top3 #3)",
+    "decision": "applied",
+    "reason": "누락된 인덱스를 추가하는 순수 성능 개선이며 매매 판단과 무관, DDL 한 줄 추가로 기존 동작을 깨뜨릴 위험이 없음(쓰기비용 증가는 무시 가능). EXPLAIN QUERY PLAN으로 쿼리가 실제로 idx_trades_timestamp를 사용하도록 바뀌는 것을 확인함.",
+    "commit": "22e1ad687e48f29ecf9de2b2980e12ddbde17db7"
+  },
+  {
+    "timestamp": "2026-11-16_1325",
+    "proposal": "resolve_predictions()의 미확정 건별 개별 UPDATE 루프를 하나의 executemany 호출로 묶어, 미확정 건이 쌓였을 때(가격 피드 지연 등) N번의 DB 왕복이 발생하는 비효율을 줄임",
+    "role": "storage (구체적 제안 #3, 이번 회차 synthesizer Top3는 아니지만 비용 거의 0에 효과가 분명한 저비용 개선으로 직접 선정)",
+    "decision": "applied",
+    "reason": "비효율적 쿼리 패턴을 고치는 순수 리팩터링으로 반환값/판정 로직(적중여부 계산)은 완전히 동일하게 유지됨 — 매매 판단과 무관. in-memory sqlite 테스트로 resolved/correct/actual_price 값과 반환 건수가 기존 코드와 동일함을 확인함.",
+    "commit": "76a87d9ef04d79867699ee35d240802f5404df82"
+  },
+  {
+    "timestamp": "2026-11-16_1325",
+    "proposal": "lstm_model.train_model()의 train/val split을 X[:split]/X[split:]에서 X[:split-seq_len]/X[split:]로 바꿔, 겹치는 슬라이딩 윈도우 때문에 train 마지막 샘플과 val 첫 샘플의 입력 구간이 겹쳐 val_accuracy가 낙관적으로 보이던 문제를 없앰",
+    "role": "lstm (구체적 제안 C, synthesizer가 '다음 순위'로 언급했으나 이번 회차에 직접 선정해 반영)",
+    "decision": "applied",
+    "reason": "검증 지표(val_accuracy)의 신뢰도를 높이는 순수 방법론적 수정으로, 실거래 판단(진입/청산/베팅비율/손절)에는 전혀 영향을 주지 않음. train 샘플이 seq_len만큼만 줄어 전체 샘플 수(수만개) 대비 영향이 미미하다는 리포트의 트레이드오프 평가에 동의함. 합성 랜덤워크 데이터로 기존 코드가 실제로 겹침이 있었음(True)과 수정 후 완전히 분리됨을 확인했고, NEUTRAL_BAND 정상값 기준으로도 n_train/n_val이 새 공식과 일치하며 샘플이 과도하게 줄지 않음을 확인함.",
+    "commit": "a43d7715e77a78989bc704b0149052e2c9bfd89a"
+  },
+  {
+    "timestamp": "2026-11-16_1325",
+    "proposal": "portfolio.py apply_buy_signal()에 손실 포지션 물타기 감쇠(fraction *= 0.5) 추가 + main_loop.py MAX_TRADE_FRACTION을 0.9에서 0.6~0.7로 하향 (synthesizer Top3 #1, risk가 2회차 연속 재지적)",
+    "role": "risk (synthesizer Top3 #1)",
+    "decision": "skipped",
+    "reason": "베팅 비율(얼마나 투입할지)을 직접 바꾸는 매매 핵심 판단이며, risk 리포트 스스로 '감쇠 계수(0.5 등)는 백테스트로 검증 필요'라고 명시했고 MAX_TRADE_FRACTION 하향도 '상승장 기회비용'이라는 트레이드오프가 있어 코드 리뷰만으로는 효과를 명백히 검증할 수 없음. 판단 기준 2번(매매 핵심 판단은 코드리뷰만으로 검증 가능한 경우에만 반영)에 따라 반영하지 않고, 다음 회차 이후 사람이 백테스트와 함께 계수를 직접 정하도록 남겨둠.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1325",
+    "proposal": "portfolio.py STOP_LOSS_PCT(0.08)를 코인별 override dict(예: BTC 0.06 / DOGE 0.12)로 차등화",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "손절 기준이라는 매매 핵심 판단이며, 리포트 자체가 '실제로 DOGE 등에서 손절이 얼마나 더 자주 발생했는지는 trading.db 실데이터를 봐야 판단 가능'이라고 명시(판단 기준 5번에 해당). 코드 리뷰만으로 적정 차등값을 검증할 수 없어 반영하지 않음.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1325",
+    "proposal": "Portfolio에 peak_value_krw 필드를 추가해 최대낙폭(MDD)을 snapshots에 함께 기록",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "매매 판단 자체를 바꾸진 않아 기준 2번에는 걸리지 않지만, 기존에 저장된 스냅샷에는 값이 없어 조회 시 하위호환 처리가 필요하다고 리포트 스스로 명시했고(storage 담당자와 조율 필요), 스키마 변경 + 기존 데이터 이전 성격을 일부 가져 판단 기준 3번(운영 중단/기존 데이터 변환이 필요한 변경 제외)에 해당할 위험이 있음. 사람이 하위호환 처리 방식을 직접 정하도록 남겨둠.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1325",
+    "proposal": "strategies.py MACDStrategy.default_params()의 fast/slow/signal을 스캘핑형 단축 세트(예: 5/13/5)로 변경해 ma_cross_rsi와의 룩백 중복을 줄임",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "매매 신호 발생 임계값(룩백 기간)을 바꾸는 매매 핵심 판단이며, 리포트가 '적정값은 실거래 데이터 기반 백테스트로만 확정 가능'이라고 명시(판단 기준 5번). synthesizer도 risk의 물타기 가드 미적용 상태에서 신호 빈도를 늘리면 위험이 먼저 커진다고 지적해 이번 회차에는 더더욱 반영하지 않음.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1325",
+    "proposal": "MACDStrategy.signal()에 히스토그램 크기 최소 기준(min_hist_pct) 필터를 추가해 저변동 구간의 노이즈성 크로스를 걸러냄",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "매매 신호를 내는 임계값을 바꾸는 매매 핵심 판단이며, 적정 임계값은 백테스트로만 확정 가능하다고 리포트가 명시함(판단 기준 5번). 또한 learner.py가 기존 파라미터를 성과 기반으로 조정해왔을 가능성과 충돌할 수 있다는 점도 리포트가 '영향도 확인 못함'으로 남겨, 사람이 직접 판단하도록 유보함.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1325",
+    "proposal": "lstm NEUTRAL_BAND를 코인별 고정값 대신 각 코인 수익률 분포 기반 동적값으로 변경(train_model에서 median 기반 계산)",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "모델이 학습하는 라벨(상승/하락/중립 판정) 기준을 코인마다 다르게 바꾸는 변경으로, 결과적으로 실거래에 쓰이는 예측 신호의 성격이 달라짐. 리포트도 '코인 간 신호 강도 비교가 더 어려워질 수 있다'는 트레이드오프를 명시했고 효과를 코드 리뷰만으로 명확히 검증하기 어려워, 애매한 항목은 반영하지 않는다는 원칙에 따라 유보함.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1325",
+    "proposal": "lstm build_features에 BTC 동행성 피처(btc_ret)를 추가(N_FEATURES 5->6)",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "입력 차원이 바뀌어 기존 저장된 .pt 가중치와 구조가 맞지 않아 전 코인 전면 재학습이 필요하고, BTC 자체 모델은 자기참조 처리까지 별도로 필요하다고 리포트가 명시함 — 기존 동작을 깨뜨릴 위험이 낮은 변경이 아니라 판단 기준 3번에 해당해 반영하지 않음. PC에서 상시 실행 중인 모델 파일과의 호환성 문제이기도 해 사람이 재학습 타이밍을 직접 정하는 게 안전함.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1325",
+    "proposal": "main_loop.py의 retrain_lstm() 동기 호출을 threading.Thread(daemon=True)로 백그라운드 실행해, 재학습 중 매매 사이클이 완전히 멈추는 문제를 해소",
+    "role": "execution",
+    "decision": "skipped",
+    "reason": "리포트 스스로 '단순 패치가 아니라 모델 저장 방식(원자적 교체)까지 같이 봐야 안전하므로 적용 전 별도 검토 단계를 권장'한다고 명시함. 학습 중 .pt 파일 쓰기와 매매 사이클의 predict_proba 읽기 사이 레이스 컨디션, last_retrain_at 전역변수의 스레드 안전성 등 여러 동시성 이슈가 함께 해결돼야 해서 이번 회차의 '보수적으로 판단' 원칙에 따라 반영하지 않고 다음에 사람이 직접 설계하도록 남겨둠.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1325",
+    "proposal": "main_loop.py의 for _ in range(CYCLE_INTERVAL_SEC): time.sleep(1) 고정 슬립이 사이클 작업 소요시간을 고려하지 않아 실제 주기가 '작업시간+60초'가 되는 문제",
+    "role": "execution",
+    "decision": "skipped",
+    "reason": "리포트가 '부가 관찰, 우선도 낮음'으로만 언급했고 구체적 수정 제안이나 영향 범위 분석이 없어, 이번 회차에서는 다루지 않고 기록만 남김.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1325",
+    "proposal": "predictions 테이블에 보관주기(prune_resolved_predictions, keep_days=14)를 도입해 resolved=1인 오래된 예측을 주기적으로 삭제",
+    "role": "storage",
+    "decision": "skipped",
+    "reason": "코드 품질 문제라기보다 새로운 자동 삭제 동작을 도입하는 운영 정책 변경이며, keep_days 같은 보존기간 값 자체가 임의의 판단이 필요한 파라미터임. 리포트도 '삭제 대신 별도 집계 테이블에 일별 요약만 남기는 방식도 고려할 수 있다'며 설계 선택지가 여러 개임을 인정해, 사람이 보존 정책을 직접 정하도록 유보함. 급한 성능 문제는 아님(조회 자체는 기존 인덱스로 느려지지 않는다고 리포트가 확인함).",
+    "commit": null
   }
 ]
