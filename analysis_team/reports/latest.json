@@ -1,47 +1,47 @@
 {
-  "generated_at": "2026-11-16_1619",
+  "generated_at": "2026-11-16_1718",
   "roles": {
     "execution": {
       "role": "execution",
       "role_label": "실행/버그 분석가",
-      "timestamp": "2026-11-16_1619",
-      "path": "analysis_team/reports/2026-11-16_1619_execution.md",
-      "summary": "예외처리·재시도·레이트리미터 등 과거 리포트에서 지적된 문제들은 대부분 코드에 반영되어 있고 구조는 전반적으로 견고하나, data_fetcher.py의 일부 경고 로그가 `print()`로만 출력되어 run.log에 남지 않는 점이 새로 발견된 진단 공백이다."
+      "timestamp": "2026-11-16_1718",
+      "path": "analysis_team/reports/2026-11-16_1718_execution.md",
+      "summary": "예외처리·페이지네이션·레이트리밋 설계는 이미 상당히 견고하게 잡혀 있고(전략/코인 단위 격리, 공유 레이트리미터, 막힌 페이지네이션 감지 등 과거 분석팀 피드백이 이미 반영됨), 남아있는 핵심 이슈는 \"코인별 모델 누락 시 로그 폭주\"와 \"사이클 주기 드리프트\" 두 가지다."
     },
     "lstm": {
       "role": "lstm",
       "role_label": "LSTM 분석가",
-      "timestamp": "2026-11-16_1619",
-      "path": "analysis_team/reports/2026-11-16_1619_lstm.md",
-      "summary": "피처 구성과 모델 구조는 1분봉 예측이라는 어려운 문제에 맞게 보수적으로 설계되어 있고 파인튠/롤백 안전장치도 이미 잘 갖춰져 있으나, 피처에 \"코인 간 동조화\" 신호가 빠져 있고 하루 10회 재학습이 90일 윈도우 대부분을 중복 학습하는 비효율이 있다."
+      "timestamp": "2026-11-16_1718",
+      "path": "analysis_team/reports/2026-11-16_1718_lstm.md",
+      "summary": "피처·모델 구조·안전장치(val_acc 롤백, chronological split)는 전반적으로 신중하게 설계되어 있고, 가장 구조적인 리스크는 \"하루 10회 재학습 × 90일 윈도우\"의 극단적인 겹침으로 인해 파인튠이 최신 패턴보다 과거 패턴을 계속 반복 학습하는 쪽에 쉽게 치우친다는"
     },
     "risk": {
       "role": "risk",
       "role_label": "리스크 분석가",
-      "timestamp": "2026-11-16_1619",
-      "path": "analysis_team/reports/2026-11-16_1619_risk.md",
-      "summary": "코인별 자금이 격리되어 있어 \"전체 자본의 50% 집중\"은 아니지만, 고확신 구간의 숏 레버리지 결합과 변동성 미반영 균등배분이 코인 슬롯 단위로는 유의미한 집중 리스크를 만든다."
+      "timestamp": "2026-11-16_1718",
+      "path": "analysis_team/reports/2026-11-16_1718_risk.md",
+      "summary": "전체적으로 손절·강제청산·코인별 자금 격리 등 안전장치는 잘 갖춰져 있다. 다만 \"평균단가 재계산\"이 손절 기준 자체를 희석시켜 하락(상승) 추세에서 같은 방향 신호가 반복될 때 손절이 계속 뒤로 밀리는 구조적 위험이 하나 있고, 리스크조정 지표(MDD 등) 보완이 필요하다."
     },
     "storage": {
       "role": "storage",
       "role_label": "데이터/저장소 분석가",
-      "timestamp": "2026-11-16_1619",
-      "path": "analysis_team/reports/2026-11-16_1619_storage.md",
-      "summary": "스키마/인덱스와 동시성 처리는 쿼리 패턴에 잘 맞게 견고히 유지되고 있고, predictions/model_trainings의 보관주기 부재와 portfolios 문자열 키 설계는 여러 차례 지적되었으나 설계 의도·마이그레이션 비용 문제로 의도적으로 보류된 채 그대로 남아 있다."
+      "timestamp": "2026-11-16_1718",
+      "path": "analysis_team/reports/2026-11-16_1718_storage.md",
+      "summary": "인덱스/동시성 처리는 이미 직전 리뷰 라운드들을 거쳐 쿼리 패턴에 맞게 잘 보강되어 있고, 남은 핵심 리스크는 append-only 테이블의 \"관측 도구는 있지만 실제 prune 로직이 없는 상태\"와 `portfolios` 합성 키의 입력 검증 누락이다."
     },
     "strategy": {
       "role": "strategy",
       "role_label": "전략 분석가",
-      "timestamp": "2026-11-16_1619",
-      "path": "analysis_team/reports/2026-11-16_1619_strategy.md",
-      "summary": "추세추종 3종(ma_cross_rsi, macd_momentum, trend_follow)이 사실상 \"이동평균 차이\" 신호를 변주한 것이라 상관관계가 높고, 4개 전략 모두 volume 컬럼을 전혀 쓰지 않아 저거래량 구간의 가짜 움직임을 걸러내지 못하는 점이 가장 큰 리스크다."
+      "timestamp": "2026-11-16_1718",
+      "path": "analysis_team/reports/2026-11-16_1718_strategy.md",
+      "summary": "4개 조건식 모두 코드 구조 자체는 깔끔하지만, 파라미터는 일봉/스윙 트레이딩용 교과서 값을 그대로 가져왔고, ma_cross_rsi·macd_momentum·trend_follow 3개는 사실상 \"이동평균 기반 추세추종\"으로 로직이 중복되며, MACrossRSI의 SELL 필터는 급락"
     },
     "synthesizer": {
       "role": "synthesizer",
       "role_label": "종합 조정자",
-      "timestamp": "2026-11-16_1619",
-      "path": "analysis_team/reports/2026-11-16_1619_synthesizer.md",
-      "summary": "1. **data_fetcher.py의 print() 경고를 log.warning/log.info로 교체** (실행 분석가, 175-176/188-189/259-260/271줄). 코드 수정량이 가장 적고 리스크가 거의 없으면서, run.log에 안 남던 진단 공백을 바로 메운다. 다른"
+      "timestamp": "2026-11-16_1718",
+      "path": "analysis_team/reports/2026-11-16_1718_synthesizer.md",
+      "summary": "1. **손절 기준선 희석 방지 (risk, 최우선)** — `portfolio.py` buy()/open_short()(111-114, 159-163행)의 평균단가 재계산이 `check_stop_loss_and_liquidation()`(240-260행)의 손절 기준선 자체를 현재가 "
     }
   }
 }
