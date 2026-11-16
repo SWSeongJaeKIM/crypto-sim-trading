@@ -1,47 +1,47 @@
 {
-  "generated_at": "2026-11-16_0719",
+  "generated_at": "2026-11-16_0820",
   "roles": {
     "execution": {
       "role": "execution",
       "role_label": "실행/버그 분석가",
-      "timestamp": "2026-11-16_0719",
-      "path": "analysis_team/reports/2026-11-16_0719_execution.md",
-      "summary": "직전(06:18) 리포트에서 지적한 로깅 경로 불일치와 사이클 타이밍 드리프트는 코드 변경 없이 그대로 남아 있고, 추가로 `run_one_cycle`의 예외처리 범위가 전략 단위로 분리되어 있지 않아 한 전략의 오류가 나머지 전략까지 모두 스킵시키는 구조적 위험을 새로 발견했다."
+      "timestamp": "2026-11-16_0820",
+      "path": "analysis_team/reports/2026-11-16_0820_execution.md",
+      "summary": "전반적인 예외처리 구조(사이클 단위 try/except, 코인별 개별 try/except)는 잘 설계되어 있으나, 최초 LSTM 학습 구간의 예외처리 누락과 data_fetcher의 일부 예외 미포착/로깅 공백이 복구력을 약화시킬 수 있다."
     },
     "lstm": {
       "role": "lstm",
       "role_label": "LSTM 분석가",
-      "timestamp": "2026-11-16_0719",
-      "path": "analysis_team/reports/2026-11-16_0719_lstm.md",
-      "summary": "피처/모델 규모 자체는 데이터 양에 비해 과하지 않게 균형이 잡혀 있으나, 매일 반복되는 파인튜닝에 \"성능 저하 방지\" 안전장치가 전혀 없고 ret/vol_chg 피처가 정규화되지 않은 점이 가장 먼저 손봐야 할 부분이다."
+      "timestamp": "2026-11-16_0820",
+      "path": "analysis_team/reports/2026-11-16_0820_lstm.md",
+      "summary": "학습 데이터셋 구성(`build_dataset`)과 추론(`predict_proba`)이 \"다음 캔들\"의 시점을 서로 다르게 정의하고 있어, 모델이 실제 운용 시 쓰이는 것과 다른 과제로 학습되고 있는 구조적 불일치가 가장 큰 문제다."
     },
     "risk": {
       "role": "risk",
       "role_label": "리스크 분석가",
-      "timestamp": "2026-11-16_0719",
-      "path": "analysis_team/reports/2026-11-16_0719_risk.md",
-      "summary": "자금 집중도(베팅 비율)는 \"50%\"보다 더 공격적으로 실제 작동하며, 가장 큰 구조적 공백은 손실 중에도 신호만으로 계속 추가매수(물타기)가 가능하다는 점이다."
+      "timestamp": "2026-11-16_0820",
+      "path": "analysis_team/reports/2026-11-16_0820_risk.md",
+      "summary": "TRADE_FRACTION은 실제로는 고정 50%가 아니라 확신도 기반 0.2~0.9 가변 비율이며, 전반적인 구조(6코인 균등배분, reset/cumulative 이중 포트폴리오)는 합리적이나 \"약한 신호에도 최소 20% 베팅을 강제\"하는 점과 \"연속 동일방향 신호 시 손실 중에도 반"
     },
     "storage": {
       "role": "storage",
       "role_label": "데이터/저장소 분석가",
-      "timestamp": "2026-11-16_0719",
-      "path": "analysis_team/reports/2026-11-16_0719_storage.md",
-      "summary": "스키마/인덱스 자체는 대체로 적절하지만, main_loop.py가 전체 수명 동안 커밋 없이 하나의 트랜잭션만 쓰는 구조가 가장 심각한 문제이며, predictions 무제한 누적과 portfolios 키 네이밍도 개선 여지가 있다."
+      "timestamp": "2026-11-16_0820",
+      "path": "analysis_team/reports/2026-11-16_0820_storage.md",
+      "summary": "스키마/인덱스는 실제 쿼리 패턴(strategy+timestamp, coin+predicted_at, resolved)에 잘 맞게 설계돼 있으나, SQLite 동시성 설정(WAL/busy_timeout) 부재와 predictions의 무제한 누적, portfolios 키의 문자열 합성 "
     },
     "strategy": {
       "role": "strategy",
       "role_label": "전략 분석가",
-      "timestamp": "2026-11-16_0719",
-      "path": "analysis_team/reports/2026-11-16_0719_strategy.md",
-      "summary": "4개 조건식의 진입/청산 로직 자체는 각각 타당하지만, RSI 계산 함수에 극단적 추세 구간에서 생기는 실질적 버그가 있고, `ma_cross_rsi`와 `macd_momentum`이 같은 26기간 이동평균을 공유해 사실상 같은 신호를 내며, 파라미터는 1분봉 전용 조정 없이 일봉 표준"
+      "timestamp": "2026-11-16_0820",
+      "path": "analysis_team/reports/2026-11-16_0820_strategy.md",
+      "summary": "4개 전략 모두 종가(close)만 사용하고 volume 컬럼을 신호 로직에 전혀 쓰지 않는 점이 가장 큰 구조적 공백이며, ma_cross_rsi와 macd_momentum은 거의 같은 추세전환 신호를 내는 반면 bollinger_rsi/trend_follow와는 성격이 반대라 포트폴"
     },
     "synthesizer": {
       "role": "synthesizer",
       "role_label": "종합 조정자",
-      "timestamp": "2026-11-16_0719",
-      "path": "analysis_team/reports/2026-11-16_0719_synthesizer.md",
-      "summary": "1. **main_loop.py 트랜잭션 분리 (storage 제안)** — storage.py의 connect()는 with 블록 종료 시에만 commit하는데, main_loop.py가 이 커넥션을 while 무한루프 전체에 걸쳐 그대로 쓰고 있어 사실상 프로세스 수명 전체가 하나의"
+      "timestamp": "2026-11-16_0820",
+      "path": "analysis_team/reports/2026-11-16_0820_synthesizer.md",
+      "summary": "1. **storage.py의 SQLite 동시성 설정 추가** (데이터/저장소) — `connect()`에 `PRAGMA journal_mode=WAL`, `PRAGMA busy_timeout=5000` 2줄만 추가하면 main_loop(쓰기)와 dashboard(읽기)의 \"datab"
     }
   }
 }
