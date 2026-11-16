@@ -152,7 +152,9 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
     if resumed_from_existing:
         # map_location=DEVICE: 예전에 CPU로 저장된 모델이든, 다른 디바이스에서
         # 저장된 모델이든 지금 실행 중인 디바이스(GPU/CPU)로 바로 올라오게 한다.
-        model.load_state_dict(torch.load(existing_path, map_location=DEVICE))
+        # weights_only=True: 우리가 직접 저장한(cpu_state 딕셔너리) 파일만
+        # 읽으므로 안전하게 켤 수 있고, pickle 전체 허용 경고도 사라진다.
+        model.load_state_dict(torch.load(existing_path, map_location=DEVICE, weights_only=True))
 
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     loss_fn = nn.BCEWithLogitsLoss()
@@ -231,7 +233,9 @@ def _load_model(coin: str) -> LSTMClassifier | None:
         return None
     if coin not in _loaded_models:
         model = LSTMClassifier()
-        model.load_state_dict(torch.load(path, map_location="cpu"))
+        # weights_only=True: 우리가 직접 저장한 파일만 읽으므로 안전하게
+        # 켤 수 있고, pickle 전체 허용 경고도 사라진다.
+        model.load_state_dict(torch.load(path, map_location="cpu", weights_only=True))
         model.eval()
         _loaded_models[coin] = model
     return _loaded_models[coin]
