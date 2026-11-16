@@ -329,7 +329,10 @@ def resolve_predictions(conn, current_prices_krw: dict[str, float]) -> int:
     현재가로 확정짓는다. 예측방향(UP/DOWN)과 실제 가격변화 방향이 일치하면 correct=1.
     반환: 이번에 확정한 건수."""
     rows = conn.execute("SELECT * FROM predictions WHERE resolved = 0").fetchall()
-    n = 0
+    # 미확정 건마다 개별 UPDATE 왕복을 내지 않고, 한 번에 적용할 변경을 모아
+    # executemany로 한 번에 묶어서 실행한다 (가격 피드 지연 등으로 미확정 건이
+    # 일시적으로 쌓였을 때 N번 왕복이 생기는 걸 막는다). 결과는 기존과 동일.
+    updates = []
     for r in rows:
         coin = r["coin"]
         if coin not in current_prices_krw:
@@ -339,12 +342,13 @@ def resolve_predictions(conn, current_prices_krw: dict[str, float]) -> int:
             continue  # 가격이 안 바뀐 사이클이면 다음 기회에 확정 (방향 판단 불가)
         actual_direction = "UP" if actual_price > r["price_at_prediction"] else "DOWN"
         correct = 1 if actual_direction == r["predicted_direction"] else 0
-        conn.execute(
+        updates.append((actual_price, correct, r["id"]))
+    if updates:
+        conn.executemany(
             "UPDATE predictions SET resolved=1, actual_price=?, correct=? WHERE id=?",
-            (actual_price, correct, r["id"]),
+            updates,
         )
-        n += 1
-    return n
+    return len(updates)
 
 
 def prediction_accuracy(conn, coin: str | None = None, limit: int = 500) -> dict:
