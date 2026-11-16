@@ -45,6 +45,33 @@ class FetchError(Exception):
     pass
 
 
+class _RateLimiter:
+    """여러 스레드가 동시에 호출해도 전체 요청 간 최소 간격(min_interval_sec)을
+    전역으로 강제하는 간단한 레이트 리미터.
+
+    fetch_all_minute_history는 6코인을 각자 스레드로 동시에 돌리는데, 각
+    스레드가 "자기 혼자" sleep_sec(기본 0.12초)만 지키면 6개 스레드가 각자
+    독립적으로 0.12초마다 요청을 쏘게 되어 전체 초당 요청 수는 순차 실행
+    (~8.3req/s) 대비 최대 코인 수(6)배(~50req/s)까지 늘어날 수 있다 — 코드
+    주석은 "병렬화해도 교류량 자체는 늘지 않는다"고 돼 있었지만 실제로는
+    그렇지 않았다. 이 리미터를 모든 코인 스레드가 공유하면, 스레드 수와
+    무관하게 Upbit에 가는 실제 요청 속도가 순차 실행과 동일하게 유지된다."""
+
+    def __init__(self, min_interval_sec: float):
+        self._min_interval = min_interval_sec
+        self._lock = threading.Lock()
+        self._next_allowed = 0.0
+
+    def wait(self) -> None:
+        with self._lock:
+            now = time.monotonic()
+            wait_sec = self._next_allowed - now
+            if wait_sec > 0:
+                time.sleep(wait_sec)
+                now = time.monotonic()
+            self._next_allowed = max(now, self._next_allowed) + self._min_interval
+
+
 def _http_get_json(url: str, timeout: int = 10, retries: int = 3) -> dict | list:
     last_err: Optional[Exception] = None
     for attempt in range(retries):
@@ -89,7 +116,8 @@ def fetch_latest_minute_candles(market: str, count: int = 200) -> pd.DataFrame:
 
 
 def fetch_minute_history(market: str, days: int = 14, sleep_sec: float = 0.12,
-                          max_pages: int | None = None, on_page=None) -> pd.DataFrame:
+                          max_pages: int | None = None, on_page=None,
+                          rate_limiter: "_RateLimiter | None" = None) -> pd.DataFrame:
     """최근 `days`일치 1분봉 전체를 페이지네이션으로 수집 (LSTM 학습용).
     Upbit은 페이지당 최대 200개(=200분)만 주므로, days=14면 약 14*1440/200≈101회 호출.
     `to` 파라미터로 과거 방향 페이지네이션.
@@ -102,7 +130,14 @@ def fetch_minute_history(market: str, days: int = 14, sleep_sec: float = 0.12,
     ("어쩔 때는 멈추고 어쩔 때는 그냥 돌아간다"는 바로 이 증상).
 
     on_page(page_idx, oldest_time, rows_so_far): 페이지 하나 받을 때마다 호출
-    (진행 로그/진행률 표시용, 선택). 멈춘 건지 그냥 느린 건지 구분하려면 필수."""
+    (진행 로그/진행률 표시용, 선택). 멈춘 건지 그냥 느린 건지 구분하려면 필수.
+
+    rate_limiter: 주어지면 각 페이지 요청 전에 이걸로 전역 페이싱을 하고,
+    기존 sleep_sec 기반의 "이 호출 혼자"만의 간격 유지는 건너뛴다 (여러
+    코인을 동시에 fetch_minute_history로 돌릴 때 fetch_all_minute_history가
+    공유 리미터를 넘겨서 전체 요청 속도를 제어하는 용도). None(기본값)이면
+    예전과 동일하게 sleep_sec만으로 이 호출 단독의 페이싱을 한다 — 단독
+    호출(예: 테스트, 일회성 스크립트)의 동작은 그대로 유지된다."""
     cutoff = pd.Timestamp.now() - pd.Timedelta(days=days)
     if max_pages is None:
         max_pages = int(days * 1440 / 200 * 1.2) + 5
@@ -112,6 +147,8 @@ def fetch_minute_history(market: str, days: int = 14, sleep_sec: float = 0.12,
     stuck_count = 0
 
     for page_idx in range(1, max_pages + 1):
+        if rate_limiter is not None:
+            rate_limiter.wait()
         url = f"{UPBIT_BASE}/v1/candles/minutes/1?market={market}&count=200"
         if to_param:
             url += f"&to={to_param}"
@@ -142,7 +179,8 @@ def fetch_minute_history(market: str, days: int = 14, sleep_sec: float = 0.12,
 
         if oldest_time <= cutoff or len(raw) < 200:
             break
-        time.sleep(sleep_sec)
+        if rate_limiter is None:
+            time.sleep(sleep_sec)
     else:
         print(f"[WARN] {market} 수집이 max_pages({max_pages})에 도달해 중단됨 "
               f"(목표 {days}일 중 일부만 수집됐을 수 있음)")
@@ -180,10 +218,13 @@ def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=Non
 
     6개 코인을 각자 별도 스레드에서 동시에 수집한다 (예전엔 순차로 하나씩
     받아서 6배 느렸음 — 코인당 ~90초면 전체 ~9분이던 게, 병렬화하면 전체도
-    ~90초 선으로 줄어듦). 각 코인 내부의 페이지 간 sleep_sec(기본 0.12초)은
-    그대로 유지하므로, 업비트 분당 요청 제한에 대한 '매너'는 코인당 기준으로
-    동일하게 지켜지고 순간 버스트만 늘지 않는다 — 동시에 보내는 요청 수는
-    최대 6개(코인당 1개씩)로, 순차 대비 교류량 자체가 늘진 않는다.
+    ~90초 선으로 줄어듦). 모든 코인 스레드가 전역 `_RateLimiter` 하나를
+    공유해서, 실제 Upbit에 가는 요청 간격이 "전체 기준" sleep_sec(기본
+    0.12초)로 유지된다 — 예전에는 각 스레드가 "자기 혼자" sleep_sec만
+    지켰기 때문에 6개 스레드가 각자 0.12초마다 쏘면 전체 초당 요청 수가
+    순차 실행 대비 최대 6배까지 늘어나는 문제가 있었다(주석은 "늘지 않는다"고
+    돼 있었지만 실제 동작은 그렇지 않았다). 공유 리미터로 이제는 스레드 수와
+    무관하게 전체 요청 속도가 순차 실행과 같게 유지된다.
 
     on_progress(coin, index, total): 코인 하나 수집이 시작/진행될 때마다
     호출 (대시보드 진행표시 + 워치독 하트비트용). 여러 스레드에서 동시에
@@ -193,6 +234,9 @@ def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=Non
     expected_pages = int(days * 1440 / 200)
     result: dict[str, pd.DataFrame] = {}
     print_lock = threading.Lock()
+    # 6개 코인 스레드가 모두 이 리미터 하나를 공유 — 전체 요청 속도를
+    # 스레드 수와 무관하게 "코인 1개 기준" 간격(0.12초)으로 제한한다.
+    history_rate_limiter = _RateLimiter(min_interval_sec=0.12)
 
     def _fetch_one(coin: str, i: int) -> tuple[str, pd.DataFrame | None]:
         if on_progress:
@@ -211,7 +255,8 @@ def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=Non
 
         cache_path = DATA_DIR / f"{coin}_1m_{days}d.csv"
         try:
-            df = fetch_minute_history(UPBIT_MARKETS[coin], days=days, on_page=_on_page)
+            df = fetch_minute_history(UPBIT_MARKETS[coin], days=days, on_page=_on_page,
+                                       rate_limiter=history_rate_limiter)
             if cache and len(df):
                 df.to_csv(cache_path, index=False)
             with print_lock:
