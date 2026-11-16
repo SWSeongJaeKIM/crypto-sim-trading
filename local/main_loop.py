@@ -71,6 +71,16 @@ log = logging.getLogger("main_loop")
 
 _stop = False
 
+# run_one_cycle()의 코인별 except(아래)에서 "모델 파일 없음"에 대해 최초
+# 1회만 log.warning을 남기기 위한 메모리 플래그. has_any_model이 "코인 중
+# 하나라도 모델이 있으면 True"라서 특정 코인만 모델이 손상/삭제돼도 최초
+# 학습이 트리거되지 않던 문제(아래 missing_models 처리로 수정)와 별개로,
+# 그 코인의 신호 계산은 다음 정기 재학습 슬롯(최대 2시간24분 후)까지 매
+# 사이클(1분 간격) 계속 실패하므로, 그때마다 log.exception으로 전체
+# 스택트레이스를 반복 적재하면 로그가 금방 폭주한다 (analysis_team
+# execution 리포트 2026-11-16_1718 제안).
+_warned_missing_model: set[str] = set()
+
 
 def _handle_sigint(signum, frame):
     global _stop
@@ -313,6 +323,17 @@ def run_one_cycle(conn) -> None:
                         prob_up = lstm_model.predict_proba(coin, df)
                         if prob_up is not None:
                             storage.add_prediction(conn, coin, now, prob_up, price)
+                except FileNotFoundError as e:
+                    # 모델 파일 없음(코인별 결손)은 다음 재학습 슬롯까지 매
+                    # 사이클 반복될 수 있는 예측 가능한 상태라, 코인별로 최초
+                    # 1회만 짧게 warning을 남기고 이후엔 조용히 건너뛴다.
+                    # 그 외 예외는 아래에서 그대로 log.exception을 유지한다.
+                    if coin not in _warned_missing_model:
+                        log.warning(f"[{strat_name}/{coin}] 모델 파일 없음, 다음 재학습 전까지 "
+                                     f"이 코인만 계속 건너뜀 (같은 전략의 다른 코인에는 영향 "
+                                     f"없음, 이후 동일 사이클 반복은 로그에 남기지 않음): {e}")
+                        _warned_missing_model.add(coin)
+                    continue
                 except Exception as e:
                     log.exception(f"[{strat_name}/{coin}] 신호 계산 중 에러, 이 코인만 이번 "
                                    f"사이클 건너뜀 (같은 전략의 다른 코인에는 영향 없음): {e}")
@@ -448,13 +469,21 @@ def main():
     # 보호가 없어서, 데이터 수집 실패 등으로 예외가 나면 프로그램 전체가
     # 죽는 문제가 있었다 — 모델 없이도 일단 매매 루프(신호는 HOLD로만
     # 나가지만 조건식 전략은 정상 동작)는 돌 수 있게 여기서도 막는다.
-    has_any_model = any((lstm_model.MODEL_DIR / f"{c}_lstm.pt").exists() for c in COINS)
-    if not has_any_model:
-        log.info("저장된 LSTM 모델이 없어 최초 학습을 먼저 수행합니다 (몇 분 걸릴 수 있음)...")
+    # 예전엔 any(...)로 "코인 중 하나라도 모델이 있으면" 최초 학습을 건너뛰어서,
+    # 특정 코인(예: ADA) 모델 파일만 손상/삭제돼도 그 코인은 다음 정기 재학습
+    # 슬롯(최대 2시간24분 후)까지 계속 FileNotFoundError만 내고 있었다.
+    # 코인별로 결손을 확인해, 하나라도 없으면 (retrain_lstm()이 COINS 전체를
+    # 다시 학습하므로) 최초 학습을 수행한다 (analysis_team execution 리포트
+    # 2026-11-16_1718 제안).
+    missing_models = [c for c in COINS if not (lstm_model.MODEL_DIR / f"{c}_lstm.pt").exists()]
+    if missing_models:
+        log.info(f"저장된 LSTM 모델이 없는 코인: {missing_models} — 최초 학습을 먼저 수행합니다 (몇 분 걸릴 수 있음)...")
         try:
             retrain_lstm()  # 이 안에서 last_lstm_train 메타를 저장함 (내부에서 짧게 connect)
         except Exception as e:
             log.exception(f"최초 LSTM 학습 중 에러 (LSTM 없이 조건식 전략만으로 계속 진행): {e}")
+        finally:
+            _warned_missing_model.clear()  # 학습을 시도했으니 결손 상태가 바뀌었을 수 있어 경고 기록 초기화
 
     # 메모리 변수가 아니라 storage에 저장된 마지막 재학습 시각으로
     # 시작한다 — main_loop.py를 재시작해도 "이번 슬롯을 이미 했는지"를 안다.
@@ -486,6 +515,7 @@ def main():
             finally:
                 log.info(f"LSTM 재학습 소요 시간: {time.monotonic() - _retrain_started:.1f}초 "
                           f"(이 구간 동안 매매 사이클은 멈춰 있었음)")
+                _warned_missing_model.clear()  # 재학습을 시도했으니 결손 상태가 바뀌었을 수 있어 경고 기록 초기화
 
         retrain_left = _fmt_remaining(time_until_next_retrain(last_retrain_at))
         analysis_left = _fmt_remaining(time_until_next_cloud_analysis())
