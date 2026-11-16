@@ -558,5 +558,93 @@
     "decision": "skipped",
     "reason": "매매 판단 자체를 바꾸는 제안은 아니라 판단 기준 2번에는 걸리지 않지만, 구체적 코드 위치나 learner.py 내부 구조에 대한 지정 없이 '진단 로깅 추가' 수준으로만 제안되어 구현 범위가 불명확함. 이번 회차엔 synthesizer Top3(execution/storage)에 집중하고, 다음 회차에 구체적 구현 방안이 제시되면 재검토 권장.",
     "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1718",
+    "proposal": "main_loop.py의 has_any_model(any(...))을 코인별 결손 리스트(missing_models)로 바꿔, 특정 코인(예: ADA) 모델 파일만 손상/삭제된 경우도 최초 학습 트리거 대상으로 감지. 동시에 run_one_cycle()의 코인별 except에 FileNotFoundError 전용 분기를 추가해 모델 파일 없음은 코인당 최초 1회만 log.warning으로 남기고(재학습 시도마다 경고 기록 초기화), 그 외 예외는 기존대로 log.exception 유지",
+    "role": "execution (synthesizer Top3 #2)",
+    "decision": "applied",
+    "reason": "명백한 버그 수정(any() 때문에 부분 결손이 감지되지 않음) + 로그 폭주 방지이며 매매 판단(진입/청산/베팅비율/손절)과 전혀 무관. FileNotFoundError 외 예외는 억제 범위에서 제외해 진짜 버그를 숨기지 않도록 함(리포트가 명시한 전제조건). 임시 모델 디렉토리로 부분 결손 감지 로직을, 로그 캡처로 같은 코인이 여러 사이클 연속 실패해도 경고가 1회만 남고 다른 예외 타입은 매번 남는지를 스크립트로 검증함.",
+    "commit": "8fc7818"
+  },
+  {
+    "timestamp": "2026-11-16_1718",
+    "proposal": "main_loop.py의 고정 'for _ in range(60): sleep(1)'을 사이클 시작 시각(time.monotonic()) 기준으로 '60초 - 이번 사이클 소요시간'만큼만 쉬도록 보정해, 사이클 주기가 '작업시간+60초'로 서서히 밀리는 드리프트를 제거",
+    "role": "execution (synthesizer Top3 #2)",
+    "decision": "applied",
+    "reason": "순수 타이밍 버그 수정으로 매매 판단 로직과 무관. 재학습이 섞여 이미 60초를 넘긴 사이클은 remaining이 0이 되어 추가 대기 없이 바로 다음 사이클로 넘어가므로 별도 분기 없이도 안전함을 확인했고, Ctrl+C 응답성을 위해 최대 1초 단위로 _stop을 확인하는 기존 패턴도 유지함. 작업시간 3초/300초 두 시나리오와 실제 time.sleep을 쓰는 3사이클 시뮬레이션(목표 5초 주기)으로 총 소요시간이 정확히 목표 주기와 일치함을 검증함.",
+    "commit": "6db425f"
+  },
+  {
+    "timestamp": "2026-11-16_1718",
+    "proposal": "storage.py의 make_portfolio_key(strategy, variant)에 variant가 ('reset', 'cumulative')가 아니면 ValueError를 던지는 검증 추가 (synthesizer Top3 #3)",
+    "role": "storage (synthesizer Top3 #3)",
+    "decision": "applied",
+    "reason": "parse_portfolio_key()는 variant가 reset/cumulative가 아니면 조용히 (key, 'cumulative')로 폴백하는데, make_portfolio_key()는 쓰기 시점에 검증이 없어 오타/새 variant가 조용한 데이터 오분류로 이어질 수 있었음. 매매 판단과 무관한 순수 입력 검증 추가이며, 적용 전 main_loop.py/dashboard.py 전체에서 make_portfolio_key 호출부를 grep해 PORTFOLIO_MODES=['reset','cumulative']에서만 호출됨을 확인(dashboard.py는 parse만 사용)해 리포트가 명시한 전제조건(기존 호출부가 이미 다른 값을 쓰고 있지 않은지 확인)을 충족함. make/parse 왕복과 정상/오타/미등록 variant 케이스를 스크립트로 검증함.",
+    "commit": "a9778c8"
+  },
+  {
+    "timestamp": "2026-11-16_1718",
+    "proposal": "portfolio.py buy()/open_short()의 평균단가 재계산이 check_stop_loss_and_liquidation()의 손절 기준선 자체를 현재가 쪽으로 끌고 가는 문제를 막기 위해, CoinSlot에 first_entry_price_krw를 추가해 손절 판단은 이 값 기준으로, PnL 계산은 기존 avg_cost_krw를 그대로 쓰도록 분리 (synthesizer Top3 #1, 최우선)",
+    "role": "risk (synthesizer Top3 #1)",
+    "decision": "skipped",
+    "reason": "손절 기준(어떤 가격을 기준으로 손절할지)이라는 매매 핵심 판단을 바꾸는 제안. synthesizer가 이번 회차 최우선으로 꼽았지만, risk 리포트 스스로 트레이드오프에서 '확신도 낮게 여러 번 추가 진입하는 전략의 경우 초기 소액 진입가만으로 전체 포지션이 더 일찍 손절돼 거래 빈도와 손절 발생률이 늘어날 수 있다 — 전략별 재진입 패턴이 어떤지는 실제 운영 데이터(trading.db)를 봐야 판단 가능하며, 그 결과에 따라 STOP_LOSS_PCT를 함께 조정할 필요가 있다'고 명시함(판단 기준 2번/5번 위반). 효과(물타기 상황에서 실제로 손실이 줄어드는지, 반대로 조기 손절로 정상 반등 기회를 놓치는 빈도가 더 큰지)는 코드 리뷰만으로 순효과를 검증할 수 없어, 이전 회차들의 '물타기/손절 기준 변경' 제안과 동일한 원칙으로 보류함. 다음 회차 이후 사람이 실제 거래 데이터(재진입 빈도, 손절 발생률)를 보고 판단 권장.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1718",
+    "proposal": "data_fetcher.py fetch_minute_history의 cutoff를 pd.Timestamp.now()(시스템 로컬시간) 대신 tz='Asia/Seoul' 기준으로 명시해, PC 시스템 타임존이 KST가 아닐 때 학습 데이터 수집 기간이 의도한 days와 어긋나는 문제를 방지",
+    "role": "execution",
+    "decision": "skipped",
+    "reason": "리포트 자체가 '이 시스템이 비(非)KST 환경에서 돌 가능성이 실제로 있는지는 배포 환경 정보 확인이 선행돼야 한다(이건 코드만으로 판단 불가)'라고 명시함(판단 기준 4번에 해당하는 '실제 운영 환경 정보가 필요한 제안'). 실제 PC가 이미 KST라면 효과 없이 코드만 복잡해지는 변경이고, 반대로 아니라면 의도와 다르게 동작을 바꿀 수 있어 이번 회차에는 반영하지 않음. 배포 환경(PC 시스템 타임존)을 사람이 먼저 확인한 뒤 재검토 권장.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1718",
+    "proposal": "strategies.py MACrossRSIStrategy의 SELL 조건(dead_cross and curr_rsi > rsi_sell_min) RSI 필터를 제거하거나 rsi_sell_min(35)을 15 정도로 낮춰, 급락 시 RSI가 선행 하락해도 매도가 막히지 않게 함",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "청산(SELL) 조건의 임계값을 바꾸는 매매 핵심 판단. 리포트 스스로 'SELL의 RSI 필터를 완화하면 정상적인 하락 되돌림에서도 조기 매도가 늘어 휩쏘(whipsaw) 손실이 증가할 수 있다'는 트레이드오프를 명시해 순효과는 백테스트로만 검증 가능함(판단 기준 2번/5번).",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1718",
+    "proposal": "macd_momentum의 fast/slow(12/26, 일봉 관행값)를 5/13 정도로, bollinger_rsi의 bb_period(20)/rsi_period(14)를 10~14/7~9로 줄여 1분봉 반응 속도를 높임",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "진입/청산 신호 발생 임계값(지표 기간)을 바꾸는 매매 핵심 판단이며, 리포트가 '지표 기간을 줄이면 신호 빈도와 거래 횟수가 늘어 수수료/슬리피지 부담이 커지고 노이즈에 과적합될 위험이 있다'는 트레이드오프를 명시함(판단 기준 5번). 1325/1422/1619 회차의 동일 계열 MACD/RSI/BB 기간 단축 제안과 동일한 이유로 보류.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1718",
+    "proposal": "strategies.py 4개 조건식 공통으로 volume.iloc[-1] > volume.rolling(20).mean().iloc[-1] * 0.3 같은 최소 거래량 조건을 추가해 저유동성 구간 신호를 HOLD로 억제",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "1220/1422/1619 회차에 반복 제안된 '공통 거래량 필터'와 동일한 성격. 4개 전략 전부의 진입 조건을 바꾸는 매매 핵심 판단이며, 리포트가 '거래량 필터 추가는 임계값 설정이 과하면 정상 신호도 걸러져 튜닝(및 재백테스트) 부담이 생긴다'는 트레이드오프를 명시함(판단 기준 5번). 같은 이유로 이번 회차도 보류.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1718",
+    "proposal": "learner.backtest에서 4개 조건식 전략의 signal_series 결과 간 상관행렬을 실제 trading.db 기반으로 계산해보고, 상관이 과도하게 높으면 trend_follow의 ma_window(50)를 150 등으로 늘려 역할을 분리하는 것을 검토",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "리포트 자체가 '정확한 상관계수는 실제 운영 데이터로 백테스트해야 확인 가능'이라고 명시(판단 기준 4번 제외 대상)해 이번 회차에서 코드만으로 판단할 수 없음. 구체적 파라미터 변경(ma_window 조정)도 '검토'일 뿐 실제 적용값이 상관계수 측정 후에야 정해지므로, 측정 자체가 선행돼야 할 조사 항목으로 남김.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1718",
+    "proposal": "main_loop.py:378 HISTORY_DAYS_FOR_TRAIN=90 호출을 하루 1회만 90일 전체로, 나머지 9회는 history_days 7~14일 수준의 '경량 파인튠'으로 분리해 거의 동일한 데이터를 반복 학습하는 중복을 줄임",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "재학습 스케줄 구조 자체를 바꾸는 변경으로, 리포트 스스로 '파인튠 윈도우를 줄이면 샘플 수가 줄어 VAL_ACC_ROLLBACK_THRESHOLD(0.03)가 더 자주 발동해 저장이 잦게 스킵될 수 있음 — 함께 재조정 필요'하고 '실제 val_accuracy·거래 손익이 개선되는지는 운영 데이터(trading.db)를 봐야 판단 가능'하다고 명시함(판단 기준 2번/4번). 1619 회차에 재학습 구조 변경이 동일 이유로 보류된 바 있어 이번에도 반영하지 않음.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1718",
+    "proposal": "lstm_model.py:129 LSTMClassifier의 head에 nn.Dropout(0.2)를 Linear(hidden,16)과 ReLU() 사이에 추가해 가벼운 정규화를 더함",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "synthesizer가 이번 회차에 '효과가 작거나 트레이드오프가 있어 후순위'로 명시적으로 분류함. 리포트 스스로도 'Dropout 추가는 val_accuracy를 더 낮출 수 있어 PROB_BUY_MIN/MAX(실질적으로 매매 임계값) 재튜닝이 필요할 수 있다'고 명시해 이어지는 영향이 매매 핵심 판단까지 번지며, 실제 효과는 운영 데이터로만 판단 가능함(판단 기준 2번/4번).",
+    "commit": null
   }
 ]
