@@ -93,6 +93,10 @@ CREATE TABLE IF NOT EXISTS model_trainings (
     reason TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_model_trainings_coin ON model_trainings(coin, timestamp DESC);
+-- model_training_history(coin=None) (대시보드의 "전체 코인" 학습 기록 조회)는
+-- "ORDER BY timestamp DESC"만 하므로 idx_model_trainings_coin의 선두 컬럼(coin)을
+-- 못 써서 전체 스캔+정렬이 된다. timestamp 단독 인덱스로 그 경로를 커버.
+CREATE INDEX IF NOT EXISTS idx_model_trainings_timestamp ON model_trainings(timestamp DESC);
 CREATE TABLE IF NOT EXISTS predictions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     coin TEXT NOT NULL,
@@ -104,8 +108,15 @@ CREATE TABLE IF NOT EXISTS predictions (
     actual_price REAL,
     correct INTEGER
 );
-CREATE INDEX IF NOT EXISTS idx_predictions_coin ON predictions(coin, predicted_at DESC);
-CREATE INDEX IF NOT EXISTS idx_predictions_unresolved ON predictions(resolved);
+-- prediction_accuracy()가 "WHERE resolved=1 [AND coin=?] ORDER BY predicted_at DESC
+-- LIMIT ?"를 실행하는데, 기존 idx_predictions_coin(coin, predicted_at DESC)과
+-- idx_predictions_unresolved(resolved)만으로는 resolved 필터 + 정렬을 한 인덱스로
+-- 커버하지 못해 predictions가 계속 쌓일수록 정렬 비용이 커졌다. 기존 두 인덱스를
+-- 대체하는 복합 인덱스로 교체 (analysis_team 리포트 2026-11-16_1521_storage.md).
+DROP INDEX IF EXISTS idx_predictions_coin;
+DROP INDEX IF EXISTS idx_predictions_unresolved;
+CREATE INDEX IF NOT EXISTS idx_predictions_coin_resolved_time ON predictions(coin, resolved, predicted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_predictions_resolved_time ON predictions(resolved, predicted_at DESC);
 """
 
 
