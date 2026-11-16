@@ -222,5 +222,125 @@
     "decision": "skipped",
     "reason": "코드 품질 문제라기보다 새로운 자동 삭제 동작을 도입하는 운영 정책 변경이며, keep_days 같은 보존기간 값 자체가 임의의 판단이 필요한 파라미터임. 리포트도 '삭제 대신 별도 집계 테이블에 일별 요약만 남기는 방식도 고려할 수 있다'며 설계 선택지가 여러 개임을 인정해, 사람이 보존 정책을 직접 정하도록 유보함. 급한 성능 문제는 아님(조회 자체는 기존 인덱스로 느려지지 않는다고 리포트가 확인함).",
     "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1422",
+    "proposal": "logging.FileHandler(\"run.log\")를 Path(__file__).parent / \"run.log\"로 바꿔 heartbeat.txt처럼 절대경로로 고정 (main_loop.py:60)",
+    "role": "execution (synthesizer Top3 #1)",
+    "decision": "applied",
+    "reason": "명백한 버그 수정(상대경로 의존)이며 매매 판단과 전혀 무관. 변경 범위가 FileHandler 생성자 인자 하나뿐이라 기존 동작을 깨뜨릴 위험이 없음(이미 Path(__file__).parent 패턴을 쓰는 HEARTBEAT_PATH와 동일한 방식). tmp 작업 디렉토리에서 서브프로세스로 main_loop을 임포트해, 수정 전에는 로그가 cwd 밑에 생기고 수정 후에는 항상 local/run.log로 고정됨을 코드 리뷰+시뮬레이션으로 확인함.",
+    "commit": "f8e6cf9"
+  },
+  {
+    "timestamp": "2026-11-16_1422",
+    "proposal": "run_one_cycle()의 코인 순회 루프(candles.items(), main_loop.py 283행 근처)에 코인별 try/except를 추가해, 한 코인(예: 모델 파일 손상)의 신호 계산 예외가 같은 전략의 나머지 코인들까지 이번 사이클에서 건너뛰게 만드는 문제를 막음",
+    "role": "execution (synthesizer Top3 #2)",
+    "decision": "applied",
+    "reason": "명백한 예외처리 범위 누락 버그 수정(이미 있는 전략 단위 격리를 코인 단위로 한 겹 더 강화하는 동일한 패턴)이며 매매 판단(진입/청산/베팅비율/손절)을 전혀 바꾸지 않음. 신호 계산 실패 시 해당 코인만 이번 사이클 건너뛰는 기존 fallback과 같은 성격이라 기존 동작을 깨뜨릴 위험이 낮음. ADA만 예외를 던지도록 몬키패치한 시뮬레이션으로, 수정 전에는 반복 순서상 ADA 이전 코인(BTC/ETH)만 신호를 얻고 이후 코인은 전부 스킵되던 것이, 수정 후에는 ADA만 스킵되고 나머지 5개 코인(BTC/ETH/DOGE/XRP/SOL) 모두 정상적으로 신호를 얻음을 확인함.",
+    "commit": "10673f5"
+  },
+  {
+    "timestamp": "2026-11-16_1422",
+    "proposal": "portfolio.py apply_buy_signal()에 손실 포지션 물타기 감쇠(fraction 축소/스킵) 추가 (synthesizer Top3 #3, risk가 1220/1325/1422 세 회차 연속 지적)",
+    "role": "risk (synthesizer Top3 #3)",
+    "decision": "skipped",
+    "reason": "베팅 비율(얼마나 투입할지)을 직접 바꾸는 매매 핵심 판단이며, risk 리포트 스스로 이번 회차에도 '평균회귀형 전략의 성과를 낮출 수 있다'는 트레이드오프를 명시해 순효과는 백테스트/실거래 손익 데이터로만 검증 가능함(판단 기준 2번 위반). synthesizer가 3회 연속 Top3로 올렸다는 사실 자체는 반영 여부를 바꾸지 않음 — 1220, 1325 회차와 동일한 이유로 이번에도 보류. 다음 회차 이후 사람이 백테스트 결과와 함께 감쇠 계수를 직접 정하는 것을 권장.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1422",
+    "proposal": "retrain_lstm() 호출을 별도 threading.Thread(daemon=True)로 분리해, 재학습(수분~십수분) 동안 매매 사이클(run_one_cycle)이 60초 간격으로 계속 돌게 함",
+    "role": "execution",
+    "decision": "skipped",
+    "reason": "리포트 스스로 'storage.connect() 동시 접근이 늘어나 database is locked 재발 가능성을 다시 검토해야 한다'고 명시함. DB 동시쓰기 외에도 모델 파일(models/{coin}_lstm.pt) torch.save 쓰기와 추론측 _load_model 동시 읽기 사이의 레이스 컨디션, 상시 실행 중인 main_loop.py의 제어 흐름 자체를 바꾸는 변경이라 구조적 위험을 code review만으로 낮다고 단정하기 어려움(판단 기준 3번). 1220 회차와 동일한 이유로 보류 — 사람이 실제 PC 환경에서 테스트 후 판단할 사안.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1422",
+    "proposal": "lstm_model.build_features()에 분봉 시/요일을 sin/cos 변환한 cyclical 시간 피처를 추가하고 FEATURE_COLS에 반영",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "FEATURE_COLS 확장은 LSTM 입력 차원(N_FEATURES)을 늘려 기존에 저장된 모델 가중치(models/*.pt)의 입력층 shape과 더 이상 호환되지 않게 만듦 — 사용자 PC가 git pull 후 재시작하면 기존 저장된 모델로 추론 시 바로 shape mismatch 에러가 날 수 있어, '기존 동작을 깨뜨릴 위험이 낮을 것' 기준에 명백히 위배됨(판단 기준 3번, 1220 회차의 BTC 상관 피처 제안과 동일한 사유). 전면 재학습이 선행돼야 하고 그 효과(val_accuracy 개선 여부)도 실제 데이터로만 검증 가능.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1422",
+    "proposal": "lstm_model.build_features()에 BTC(또는 전체 평균) 수익률 피처를 추가(N_FEATURES 증가)해 코인 간 동조화 신호를 LSTM 입력에 반영",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "1220 회차에 동일한 제안(ret_btc 피처)이 이미 같은 이유로 보류된 바 있음 — N_FEATURES 변경은 기존 저장된 .pt 가중치와 shape이 안 맞게 되어 전 코인 전면 재학습이 강제되고, train_all/predict_proba 등 호출부도 함께 고쳐야 하는 범위가 큰 변경(판단 기준 3번 위배). 이번 회차에도 동일하게 반영하지 않음.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1422",
+    "proposal": "재학습 시 손실 함수에 최근 N일 샘플 가중치를 높이는 re-weighting을 도입하거나 finetune_lr을 경과시간에 따라 가변적으로 조정",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "모델이 학습하는 샘플 가중치를 바꿔 예측 신호 자체의 성격(민감도)이 달라지는 변경으로, 리포트 스스로 '과매매로 다시 이어질 수 있어 PROB_BUY_MIN/MAX 임계값 재검토가 동반되어야 한다'고 명시함. 이는 실질적으로 매매 판단에 영향을 주는 변경이며 그 순효과(과매매 여부, 정확도 변화)는 실제 운영 데이터로만 검증 가능해 판단 기준 2번/5번에 해당, 반영하지 않음.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1422",
+    "proposal": "portfolio.py STOP_LOSS_PCT(0.08)를 코인별 override dict로 차등화(예: BTC 0.06 / DOGE 0.12)",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "손절 기준이라는 매매 핵심 판단을 코인별로 다르게 바꾸는 제안이며, 리포트 자체가 초기값은 '과거 변동성 데이터 분석 후 결정'해야 한다고 명시함(판단 기준 5번). 1325 회차와 동일한 이유로 보류. synthesizer도 strategy의 MACD 민감도 조정 제안보다 이 쪽 근거가 더 탄탄하다고 평가했으나, 반영을 위해선 여전히 실제 변동성/손절 빈도 데이터가 필요해 이번 회차에 코드만으로 결정하지 않음.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1422",
+    "proposal": "Portfolio에 peak_value_krw 필드를 추가해 최대낙폭(MDD)을 snapshots에 함께 기록",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "1325 회차와 동일한 제안. 기존에 저장된 포트폴리오/스냅샷 문서에는 해당 필드가 없어 조회 시 하위호환 처리가 필요하고, 리포트 스스로 storage 쪽(스냅샷 컬렉션에서 계산)이 더 적합할 수 있다고 밝혀 설계 선택이 아직 정해지지 않음 — 스키마 변경 성격이 있어 판단 기준 3번에 해당할 위험. 사람이 설계를 먼저 정하도록 유보.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1422",
+    "proposal": "storage.py에 prune_predictions(conn, keep_days=90)을 추가해 resolved=1인 오래된 predictions 행을 주기적으로 삭제",
+    "role": "storage",
+    "decision": "skipped",
+    "reason": "1220 회차와 동일한 제안. 리포트 스스로 '지금 당장 급한지는 trading.db를 직접 봐야 판단 가능'이라고 명시(실제 운영 데이터 접근 불가 조건에 해당, 판단 기준 5번)하고, storage.py 상단 주석의 '실전 적중률을 시간순으로 전부 보존'하려는 설계 의도와 충돌할 수 있어 사람이 먼저 판단할 사안으로 남김.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1422",
+    "proposal": "portfolios 테이블을 strategy 단일 PK 문자열 합성(\"__reset\"/\"__cumulative\") 방식에서 (strategy, mode) 복합키 스키마로 변경",
+    "role": "storage",
+    "decision": "skipped",
+    "reason": "1220 회차와 동일한 제안. 기존 데이터 변환(마이그레이션)과 main_loop.py/dashboard.py 호출부 동시 수정이 필요한 범위가 큰 스키마 변경 — 운영 중단 없이 적용하기 어려워 반영 기준에서 명시적으로 제외됨(판단 기준 3번).",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1422",
+    "proposal": "strategies.py MACDStrategy.default_params()의 fast/slow/signal(12/26/9)을 1분봉에 맞게 단축(예: 5~6/13/5)",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "매매 신호 발생 임계값(이동평균 기간)을 바꾸는 매매 핵심 판단이며, 리포트가 백테스트가 필요한 추정치임을 인정함(판단 기준 5번). 또한 synthesizer가 risk의 '코인별 변동성 차이로 고변동 코인에서 휩쏘가 빈번할 수 있다'는 지적이 이 제안보다 근거가 탄탄하다고 평가하면서, MACD를 더 민감하게 하면 그 휩쏘 문제를 악화시킬 수 있다고 지적함 — risk의 코인별 손절 차등화(이번 회차도 보류)가 먼저 해결된 뒤에 재검토하는 것이 합리적이라는 synthesizer의 판단에 동의해 이번 회차에는 반영하지 않음.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1422",
+    "proposal": "MACrossRSIStrategy의 rsi_buy_max(65->55)/rsi_sell_min(35->45)를 좁혀 RSI 필터가 실질적으로 작동하게 하고 MACD와의 신호 중복을 줄임",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "신호 발생 임계값을 바꾸는 매매 핵심 판단이며, 리포트가 '신호 빈도가 줄어 기회 손실이 생길 수 있다'는 트레이드오프를 명시해 순효과는 백테스트로만 검증 가능함(판단 기준 5번).",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1422",
+    "proposal": "BollingerRSIStrategy의 BUY 조건에 'RSI가 전 캔들보다 상승 전환'(r.iloc[-1] > r.iloc[-2]) 조건을 추가해 급락장 중 반복 매수(떨어지는 칼날 잡기)를 억제",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "진입 조건을 바꾸는 매매 핵심 판단. 1220 회차의 '120기간 SMA 추세 가드' 제안과 같은 성격으로, 리포트가 '반등 초기 진입 타이밍을 한 캔들 놓쳐 수익 기회가 줄어들 수 있다'는 트레이드오프를 명시해 순효과는 백테스트가 필요함(판단 기준 2번).",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1422",
+    "proposal": "4개 조건식 전략 공통으로 signal() 진입부에 거래량 필터(최근 20캔들 평균 대비 현재 volume이 낮으면 HOLD)를 추가",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "1220 회차의 '공통 거래량 체크 헬퍼' 제안과 동일한 성격. 4개 전략 전부의 진입 조건을 바꾸는 매매 핵심 판단이며, 리포트가 '실제로 유효한 신호도 함께 걸러질 수 있어 적절한 임계값은 실거래 데이터로 튜닝이 필요하다'고 명시함(판단 기준 5번).",
+    "commit": null
   }
 ]
