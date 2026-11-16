@@ -14,9 +14,11 @@ Upbit API는 분당 요청수 제한이 있으므로 sleep_sec으로 매너를 �
 from __future__ import annotations
 
 import json
+import threading
 import time
 import urllib.request
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
@@ -153,50 +155,88 @@ def fetch_minute_history(market: str, days: int = 14, sleep_sec: float = 0.12,
 
 
 def fetch_all_latest_candles(count: int = 200) -> dict[str, pd.DataFrame]:
-    """6대 코인의 최신 1분봉 (매분 실행되는 메인 루프에서 호출)."""
+    """6대 코인의 최신 1분봉 (매분 실행되는 메인 루프에서 호출). 코인당 호출이
+    1번뿐이라 원래도 느리진 않지만, 순차 대신 동시에 보내서 사이클 자체를
+    조금이라도 더 짧게 만든다."""
     result: dict[str, pd.DataFrame] = {}
-    for coin in COINS:
+
+    def _fetch_one(coin: str) -> tuple[str, pd.DataFrame | None]:
         try:
-            result[coin] = fetch_latest_minute_candles(UPBIT_MARKETS[coin], count=count)
+            return coin, fetch_latest_minute_candles(UPBIT_MARKETS[coin], count=count)
         except FetchError as e:
             print(f"[WARN] {coin} 최신 캔들 수집 실패: {e}")
+            return coin, None
+
+    with ThreadPoolExecutor(max_workers=len(COINS)) as executor:
+        for future in as_completed(executor.submit(_fetch_one, coin) for coin in COINS):
+            coin, df = future.result()
+            if df is not None:
+                result[coin] = df
     return result
 
 
 def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=None) -> dict[str, pd.DataFrame]:
     """6대 코인의 최근 N일 1분봉 전체 (LSTM 학습/재학습 시 호출). 디스크 캐시 지원.
-    on_progress(coin, index, total): 코인 하나 수집 시작할 때마다 호출 (대시보드 진행표시용, 선택).
-    매 페이지(약 1~2초 간격)에도 같은 콜백을 호출한다 — 이 수집 단계가 가장
-    오래 걸릴 수 있는 구간이라, 워치독용 하트비트가 "코인이 바뀔 때만"이
-    아니라 그 안에서도 계속 찍혀야 "진짜 멈춤"과 "원래 느림"을 구분할 수
-    있다 (main_loop.py의 set_progress가 이 콜백 안에서 하트비트를 남긴다)."""
+
+    6개 코인을 각자 별도 스레드에서 동시에 수집한다 (예전엔 순차로 하나씩
+    받아서 6배 느렸음 — 코인당 ~90초면 전체 ~9분이던 게, 병렬화하면 전체도
+    ~90초 선으로 줄어듦). 각 코인 내부의 페이지 간 sleep_sec(기본 0.12초)은
+    그대로 유지하므로, 업비트 분당 요청 제한에 대한 '매너'는 코인당 기준으로
+    동일하게 지켜지고 순간 버스트만 늘지 않는다 — 동시에 보내는 요청 수는
+    최대 6개(코인당 1개씩)로, 순차 대비 교류량 자체가 늘진 않는다.
+
+    on_progress(coin, index, total): 코인 하나 수집이 시작/진행될 때마다
+    호출 (대시보드 진행표시 + 워치독 하트비트용). 여러 스레드에서 동시에
+    호출될 수 있으므로 호출 자체를 락으로 감싼다 — set_progress가 매번
+    짧게 DB connect를 여는 구조라 동시 호출돼도 storage.py의 재시도
+    로직으로 안전하지만, 로그 출력 순서를 깔끔하게 유지하기 위해 직렬화한다."""
     expected_pages = int(days * 1440 / 200)
     result: dict[str, pd.DataFrame] = {}
-    for i, coin in enumerate(COINS, start=1):
+    print_lock = threading.Lock()
+
+    def _fetch_one(coin: str, i: int) -> tuple[str, pd.DataFrame | None]:
         if on_progress:
-            on_progress(coin, i, len(COINS))
+            with print_lock:
+                on_progress(coin, i, len(COINS))
 
         def _on_page(page_idx, oldest_time, rows_so_far, _coin=coin, _i=i):
             # 10페이지마다(약 1~2초 간격) 한 번씩만 찍어서 로그 폭주를 막되,
             # "멈춘 건지 그냥 느린 건지"는 바로 구분할 수 있게 한다.
             if page_idx % 10 == 0 or page_idx == 1:
-                print(f"  [{_coin}] 페이지 {page_idx}/~{expected_pages} 수집 중... "
-                      f"(누적 {rows_so_far}개, 가장 오래된 시점 {oldest_time})")
-                if on_progress:
-                    on_progress(_coin, _i, len(COINS))
+                with print_lock:
+                    print(f"  [{_coin}] 페이지 {page_idx}/~{expected_pages} 수집 중... "
+                          f"(누적 {rows_so_far}개, 가장 오래된 시점 {oldest_time})")
+                    if on_progress:
+                        on_progress(_coin, _i, len(COINS))
 
         cache_path = DATA_DIR / f"{coin}_1m_{days}d.csv"
         try:
             df = fetch_minute_history(UPBIT_MARKETS[coin], days=days, on_page=_on_page)
-            result[coin] = df
             if cache and len(df):
                 df.to_csv(cache_path, index=False)
-            print(f"[{coin}] {len(df)}개 1분봉 수집 완료")
+            with print_lock:
+                print(f"[{coin}] {len(df)}개 1분봉 수집 완료")
+            return coin, df
         except FetchError as e:
-            print(f"[WARN] {coin} 히스토리 수집 실패: {e}, 캐시 확인")
+            with print_lock:
+                print(f"[WARN] {coin} 히스토리 수집 실패: {e}, 캐시 확인")
             if cache_path.exists():
-                result[coin] = pd.read_csv(cache_path, parse_dates=["open_time"])
-    return result
+                return coin, pd.read_csv(cache_path, parse_dates=["open_time"])
+            return coin, None
+
+    with ThreadPoolExecutor(max_workers=len(COINS)) as executor:
+        futures = {
+            executor.submit(_fetch_one, coin, i): coin
+            for i, coin in enumerate(COINS, start=1)
+        }
+        for future in as_completed(futures):
+            coin, df = future.result()
+            if df is not None:
+                result[coin] = df
+
+    # dict 삽입 순서가 코인 순서와 안 맞을 수 있으니(완료되는 대로 들어옴),
+    # 이후 코드가 COINS 순서를 가정하지 않도록 COINS 순서로 재정렬해서 반환.
+    return {coin: result[coin] for coin in COINS if coin in result}
 
 
 def fetch_all_latest_prices() -> dict[str, float]:
