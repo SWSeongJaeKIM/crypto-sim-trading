@@ -125,14 +125,23 @@ HISTORY_DIR.mkdir(exist_ok=True, parents=True)
 
 
 def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 256,
-                 lr: float = 1e-3, seq_len: int = SEQ_LEN, val_frac: float = 0.15,
-                 finetune: bool = True, history_days: int | None = None,
+                 lr: float = 1e-3, finetune_lr: float | None = None, seq_len: int = SEQ_LEN,
+                 val_frac: float = 0.15, finetune: bool = True, history_days: int | None = None,
                  on_epoch=None) -> dict:
     """한 코인에 대해 LSTM을 학습(또는 파인튜닝)하고 모델 파일로 저장.
 
     finetune=True(기본): 기존 저장된 가중치가 있으면 그걸 불러와 이어서 학습
     (추가학습). 없으면 새로 초기화해서 학습(최초 학습과 동일).
     finetune=False: 항상 처음부터 새로 학습.
+
+    finetune_lr: 기존 가중치를 이어 학습(파인튠)할 때 쓸 학습률. None(기본)이면
+    lr/3을 자동으로 쓴다. 매 재학습(main_loop.py의 RETRAIN_TIMES_LOCAL 스케줄,
+    하루 10회)이 거의 동일한 HISTORY_DAYS_FOR_TRAIN일 윈도우를 같은 lr로 반복
+    학습하면, "오늘 새로 들어온 데이터"가 전체 학습 신호에서 차지하는 비중이
+    구조적으로 작아서(윈도우 겹침 때문에) 가중치가 매번 과거 패턴을 다시
+    확인하는 쪽에 더 가깝게 갱신된다. 파인튠 시 lr을 낮추면 기존에 학습된
+    가중치가 매번 급격히 덮어씌워지는 것을 완화할 수 있다. 최초 학습
+    (resumed_from_existing=False)에는 영향 없음 — 그때는 항상 lr을 그대로 쓴다.
 
     저장은 두 곳에: 최신 가중치는 {coin}_lstm.pt(추론용, 매번 덮어씀),
     그리고 history/{coin}_lstm_YYYY-MM-DD.pt 로 그날 날짜 사본도 같이 남긴다
@@ -165,7 +174,9 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
         # 읽으므로 안전하게 켤 수 있고, pickle 전체 허용 경고도 사라진다.
         model.load_state_dict(torch.load(existing_path, map_location=DEVICE, weights_only=True))
 
-    opt = torch.optim.Adam(model.parameters(), lr=lr)
+    # 파인튠(이어학습)일 때만 더 낮은 학습률을 쓴다 — 최초 학습은 lr 그대로.
+    effective_lr = (finetune_lr if finetune_lr is not None else lr / 3) if resumed_from_existing else lr
+    opt = torch.optim.Adam(model.parameters(), lr=effective_lr)
     loss_fn = nn.BCEWithLogitsLoss()
 
     X_train_t = torch.from_numpy(X_train).to(DEVICE)
@@ -211,6 +222,8 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
         "coin": coin,
         "trained": True,
         "finetuned": resumed_from_existing,
+        "lr": lr,
+        "effective_lr": effective_lr,
         "n_samples": n,
         "n_train": len(X_train),
         "n_val": len(X_val),
