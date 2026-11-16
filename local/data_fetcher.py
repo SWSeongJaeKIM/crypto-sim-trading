@@ -301,8 +301,13 @@ def fetch_all_latest_prices() -> dict[str, float]:
             url = f"{UPBIT_BASE}/v1/ticker?markets={UPBIT_MARKETS[coin]}"
             data = _http_get_json(url)
             prices[coin] = float(data[0]["trade_price"])
-        except FetchError as e:
-            print(f"[WARN] {coin} 현재가 수집 실패: {e}")
+        except Exception as e:
+            # fetch_all_latest_candles/fetch_all_minute_history와 동일하게,
+            # FetchError(네트워크/HTTP 재시도 소진)뿐 아니라 Upbit 응답 형식이
+            # 예상과 달라 발생하는 KeyError/IndexError류까지 모두 잡아서
+            # 코인 1개의 오류가 fetch_all_latest_prices() 전체를 중단시키지
+            # 않도록 한다. (analysis_team 리포트 2026-11-16_1521_execution.md)
+            log.exception(f"[WARN] {coin} 현재가 수집 실패: {e}")
     return prices
 
 
