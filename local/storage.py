@@ -33,6 +33,7 @@ Claude API 전부 쓰지 않음 — 순수 로컬 파일 I/O.
 from __future__ import annotations
 
 import json
+import time
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
@@ -103,18 +104,77 @@ CREATE INDEX IF NOT EXISTS idx_predictions_unresolved ON predictions(resolved);
 """
 
 
+_BUSY_TIMEOUT_MS = 5000
+_MAX_RETRIES = 8
+_RETRY_BACKOFF_SEC = 0.3  # 재시도마다 선형으로 늘어남: 0.3, 0.6, 0.9, ...
+
+# executescript(SCHEMA)의 CREATE TABLE/INDEX IF NOT EXISTS들은 테이블이 이미
+# 있어도 매번 sqlite_master를 확인하면서 자체 트랜잭션을 여는데, 이게 매
+# connect()마다(사이클마다, progress 기록마다) 반복되면 그 자체가 "database
+# is locked" 경합 기회를 늘린다. 같은 DB 파일 기준으로 스키마는 프로세스당
+# 딱 한 번만 적용하면 되므로, 이미 적용했던 경로는 다시 실행하지 않는다.
+_schema_initialized_paths: set[str] = set()
+
+
+def _retry_on_locked(fn, *args, **kwargs):
+    """fn(*args, **kwargs)을 실행하다가 'database is locked'를 만나면 짧게
+    쉬고 재시도. SQLite의 PRAGMA busy_timeout이 1차 방어선이고, 이건 그
+    이후에도 못 뚫은 경우를 위한 2차 방어선이다 (Windows에서 짧은 생명주기의
+    커넥션들이 아주 촘촘하게 몰릴 때 busy_timeout 안에서도 즉시 에러가
+    올라오는 경우가 실제로 관찰됐다)."""
+    attempt = 0
+    while True:
+        try:
+            return fn(*args, **kwargs)
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e).lower() or attempt >= _MAX_RETRIES:
+                raise
+            attempt += 1
+            time.sleep(_RETRY_BACKOFF_SEC * attempt)
+
+
+class _RetryingConnection(sqlite3.Connection):
+    """execute/executemany/executescript/commit 호출마다 'database is
+    locked'를 자동으로 재시도하는 커넥션. storage.py의 모든 함수는
+    'conn.execute(...)' 형태로 이 객체를 그대로 쓰므로, 호출부를 하나도
+    바꾸지 않고 재시도를 전역으로 적용할 수 있다."""
+
+    def execute(self, *args, **kwargs):
+        return _retry_on_locked(super().execute, *args, **kwargs)
+
+    def executemany(self, *args, **kwargs):
+        return _retry_on_locked(super().executemany, *args, **kwargs)
+
+    def executescript(self, *args, **kwargs):
+        return _retry_on_locked(super().executescript, *args, **kwargs)
+
+    def commit(self, *args, **kwargs):
+        return _retry_on_locked(super().commit, *args, **kwargs)
+
+
 @contextmanager
 def connect(db_path: Path | str = DB_PATH):
-    conn = sqlite3.connect(str(db_path))
+    # main_loop(사이클/재학습 중 진행상태 기록)와 dashboard(주기적으로 읽기),
+    # 그리고 retrain_now.py를 수동으로 같이 돌리는 경우까지 — 여러 프로세스가
+    # 동시에 같은 DB 파일을 열 수 있다. 기본 journal_mode로는 "database is
+    # locked" 에러가 바로 날 수 있다. WAL 모드는 읽기/쓰기가 서로 거의
+    # 블로킹하지 않게 해주고, busy_timeout은 그래도 충돌하면 에러 던지기
+    # 전에 잠깐 재시도 대기한다. _RetryingConnection이 그 위에 애플리케이션
+    # 레벨 재시도까지 한 번 더 걸어준다.
+    key = str(Path(db_path).resolve())
+
+    conn = sqlite3.connect(
+        str(db_path), timeout=_BUSY_TIMEOUT_MS / 1000, factory=_RetryingConnection
+    )
     conn.row_factory = sqlite3.Row
-    # main_loop(1분마다 쓰기)와 dashboard(주기적으로 읽기)가 동시에 같은 DB
-    # 파일을 열기 때문에, 기본 journal_mode로는 "database is locked" 에러가
-    # 날 수 있다. WAL 모드는 읽기/쓰기가 서로 거의 블로킹하지 않게 해주고,
-    # busy_timeout은 그래도 충돌하면 에러 던지기 전에 잠깐 재시도 대기한다.
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
     try:
-        conn.executescript(SCHEMA)
+        if key not in _schema_initialized_paths:
+            conn.executescript(SCHEMA)
+            conn.commit()
+            _schema_initialized_paths.add(key)
+
         yield conn
         conn.commit()
     except Exception:
