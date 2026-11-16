@@ -1,47 +1,47 @@
 {
-  "generated_at": "2026-11-16_0318",
+  "generated_at": "2026-11-16_0418",
   "roles": {
     "execution": {
       "role": "execution",
       "role_label": "실행/버그 분석가",
-      "timestamp": "2026-11-16_0318",
-      "path": "analysis_team/reports/2026-11-16_0318_execution.md",
-      "summary": "전체 구조(재시도, 캐시 폴백, reset/cumulative 분리, 재학습 복구 로직)는 견고하게 설계되어 있으나, 예외 처리의 \"범위\"가 너무 넓은 단위(코인 전체 fetch, 사이클 전체)로 걸려 있어 한 코인/전략의 일시적 오류가 전체 사이클을 통째로 날릴 수 있는 지점이 있다."
+      "timestamp": "2026-11-16_0418",
+      "path": "analysis_team/reports/2026-11-16_0418_execution.md",
+      "summary": "전반적인 구조(캔들 fetch 실패 시 사이클 스킵, SIGINT/SIGTERM 처리, 타이밍 방식)는 안정적으로 설계돼 있으나, \"재학습 전체 실패 시에도 완료로 기록되는 버그\"와 \"JSON 파싱 오류가 FetchError로 통합되지 않아 예외 전파 가능성\"은 실제로 고쳐야 할 문제다"
     },
     "lstm": {
       "role": "lstm",
       "role_label": "LSTM 분석가",
-      "timestamp": "2026-11-16_0318",
-      "path": "analysis_team/reports/2026-11-16_0318_lstm.md",
-      "summary": "build_dataset의 학습 시퀀스가 추론 시점과 1틱(1분봉) 어긋나 있어 학습-추론 분포가 체계적으로 불일치하는 문제가 여전히 남아있고, 나머지(피처 구성, 모델 크기, 재학습 주기)는 모의투자 LSTM 베이스라인으로서 대체로 합리적이다."
+      "timestamp": "2026-11-16_0418",
+      "path": "analysis_team/reports/2026-11-16_0418_lstm.md",
+      "summary": "피처와 재학습 주기/데이터 기간 설계는 전반적으로 합리적이나, 파인튜닝이 \"이어서 미세조정\"이 아니라 매일 거의 전체 재학습과 동일하게 동작하고 val_accuracy를 전혀 활용하지 않는 점이 가장 눈에 띄는 개선 포인트입니다."
     },
     "risk": {
       "role": "risk",
       "role_label": "리스크 분석가",
-      "timestamp": "2026-11-16_0318",
-      "path": "analysis_team/reports/2026-11-16_0318_risk.md",
-      "summary": "레버리지·전액 올인 같은 치명적 리스크는 구조적으로 이미 차단되어 있으나, 코인별 변동성 차이를 무시한 균등배분과 리스크 조정 지표(MDD 등) 부재가 보완할 지점이다."
+      "timestamp": "2026-11-16_0418",
+      "path": "analysis_team/reports/2026-11-16_0418_risk.md",
+      "summary": "TRADE_FRACTION 자체는 코인별 슬롯 단위로 적용되어 전체 자금 집중 리스크는 제한적이지만, 손실 중에도 매수를 막는 안전장치가 없고 변동성이 다른 코인들에 동일 금액을 배분하는 점은 보완이 필요하다."
     },
     "storage": {
       "role": "storage",
       "role_label": "데이터/저장소 분석가",
-      "timestamp": "2026-11-16_0318",
-      "path": "analysis_team/reports/2026-11-16_0318_storage.md",
-      "summary": "스키마와 인덱스는 현재 쿼리 패턴에 대체로 맞게 설계되어 있으나, WAL 미적용에 따른 동시성 리스크, portfolios의 문자열 인코딩 키, predictions 보관주기 부재가 보완 포인트다."
+      "timestamp": "2026-11-16_0418",
+      "path": "analysis_team/reports/2026-11-16_0418_storage.md",
+      "summary": "predictions/trades 등 append-only 테이블의 인덱스 설계는 쿼리 패턴에 적절하지만, main_loop.py가 전체 루프 동안 커넥션을 하나만 열어두고 사이클마다 commit()을 호출하지 않아, 가동 중 쓰여진 데이터가 디스크에 반영되지 않거나(대시보드가 못 봄)"
     },
     "strategy": {
       "role": "strategy",
       "role_label": "전략 분석가",
-      "timestamp": "2026-11-16_0318",
-      "path": "analysis_team/reports/2026-11-16_0318_strategy.md",
-      "summary": "4개 조건식 중 3개(ma_cross_rsi, macd_momentum, trend_follow)가 본질적으로 같은 \"크로스오버 추세추종\" 계열이라 상관관계가 높고, 모든 전략이 volume 컬럼을 전혀 사용하지 않아 거래량 바닥 구간의 얇은 호가 노이즈에 취약하다."
+      "timestamp": "2026-11-16_0418",
+      "path": "analysis_team/reports/2026-11-16_0418_strategy.md",
+      "summary": "4개 조건식의 기본 구조는 합리적이나, RSI 매도 필터가 급락 시 청산을 막을 수 있는 설계 결함이 있고, 거래량 지표를 전혀 쓰지 않는 점과 파라미터가 일봉 관용값 그대로라는 점이 1분봉 운용에서 문제될 소지가 있다."
     },
     "synthesizer": {
       "role": "synthesizer",
       "role_label": "종합 조정자",
-      "timestamp": "2026-11-16_0318",
-      "path": "analysis_team/reports/2026-11-16_0318_synthesizer.md",
-      "summary": "**1. (execution) 예외 처리 범위 좁혀 장애 격리 — 난이도 최하, 효과 최상**"
+      "timestamp": "2026-11-16_0418",
+      "path": "analysis_team/reports/2026-11-16_0418_synthesizer.md",
+      "summary": "1. **DB 커밋 누락 수정 (storage, 최우선)** — `storage.py`의 `connect()`는 with 블록 종료 시 1회만 commit하고, `main_loop.py`는 전체 while 루프를 하나의 with로 감싸 사이클마다 explicit commit이 없다. `"
     }
   }
 }
