@@ -342,5 +342,133 @@
     "decision": "skipped",
     "reason": "1220 회차의 '공통 거래량 체크 헬퍼' 제안과 동일한 성격. 4개 전략 전부의 진입 조건을 바꾸는 매매 핵심 판단이며, 리포트가 '실제로 유효한 신호도 함께 걸러질 수 있어 적절한 임계값은 실거래 데이터로 튜닝이 필요하다'고 명시함(판단 기준 5번).",
     "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1521",
+    "proposal": "RSI 계산 함수에서 avg_loss=0일 때 rs=NaN -> fillna(50.0)로 중립 처리되어, 실제로는 RSI=100이어야 할 연속 상승(급등) 구간에서 과매수 신호가 발동하지 않는 버그 수정",
+    "role": "strategy",
+    "decision": "applied",
+    "reason": "명백한 버그 수정(의도된 분기 누락). 분기 처리 한 줄 수준이고 합성 데이터(연속 상승/하락/무변동)로 RSI가 100/0/50으로 각각 정확히 나오는지 검증 완료. synthesizer Top 1.",
+    "commit": "b7e3069"
+  },
+  {
+    "timestamp": "2026-11-16_1521",
+    "proposal": "retrain_lstm()의 코인별 학습 루프(main_loop.py)에 run_one_cycle()과 동일한 수준의 코인 단위 예외 격리(try/except+continue)를 추가해, 한 코인 학습 실패가 해당 재학습 슬롯 전체(last_retrain_at 미갱신 -> 다음 사이클 90일 재수집+전체 재학습 반복)를 날리지 않게 함",
+    "role": "execution",
+    "decision": "applied",
+    "reason": "기존 코인/전략 단위 예외 격리 패턴과 동일한 구조적 안정성 개선, 기존 동작을 깨뜨릴 위험 낮음. 합성 시나리오(코인 3개 중 1개 실패)로 나머지 코인 학습이 끊기지 않고 계속되는지 검증. synthesizer Top 2.",
+    "commit": "f35b21e"
+  },
+  {
+    "timestamp": "2026-11-16_1521",
+    "proposal": "retrain_lstm() 호출 전후로 소요 시간을 로깅해, 재학습 중 매매 사이클이 멈추는 공백 구간의 실제 길이를 run.log로 확인 가능하게 함",
+    "role": "execution",
+    "decision": "applied",
+    "reason": "순수 로깅 추가로 기존 동작에 영향 없음. 구조적 해결(비동기화)은 SQLite 쓰기 잠금 경쟁 위험이 있어 리포트가 가시화만 제안했고, 그 범위로 반영.",
+    "commit": "d01c5c7"
+  },
+  {
+    "timestamp": "2026-11-16_1521",
+    "proposal": "data_fetcher.fetch_all_latest_prices()의 'except FetchError'를 'except Exception'으로 넓혀, 같은 파일의 다른 fetch 함수들(KeyError 등 비-FetchError까지 포괄)과 예외 처리 패턴을 통일",
+    "role": "execution",
+    "decision": "applied",
+    "reason": "명백한 예외처리 누락/불일치 수정이며 이미 같은 파일의 다른 두 함수가 받아들인 트레이드오프라 일관성 측면에서 리스크가 낮음. 현재 main_loop.py에서 호출되지 않아 당장 동작 변화 없음.",
+    "commit": "fafca45"
+  },
+  {
+    "timestamp": "2026-11-16_1521",
+    "proposal": "lstm_model.py 상단 docstring/주석의 '학습 하루 1회', '30일치 데이터' 서술을 실제 main_loop.py 설정(하루 10회, 90일)에 맞춰 갱신",
+    "role": "lstm",
+    "decision": "applied",
+    "reason": "순수 문서(주석) 정정, 동작 변경 없음, 리스크 없음.",
+    "commit": "7b84be6"
+  },
+  {
+    "timestamp": "2026-11-16_1521",
+    "proposal": "LSTM 파인튠 후 val_accuracy가 이전 저장 모델 대비 임계값(0.03) 이상 떨어지면 저장을 건너뛰고 기존 가중치를 유지하는 롤백 안전장치 추가 ({coin}_lstm_meta.json에 이전 val_acc 기록)",
+    "role": "lstm",
+    "decision": "applied",
+    "reason": "모델 품질을 지키는 안전망이며 코드 리뷰+시뮬레이션으로 효과를 명백히 검증 가능(실제 매매 판단 로직 자체를 바꾸는 것이 아니라 '더 나빠진 모델을 안 쓰겠다'는 보수적 가드). 최초 학습에는 영향 없고 임계값도 보수적으로 설정. 합성 데이터로 (1)최초 저장 (2)정상 파인튠 저장 (3)인위적 하락 시 저장 스킵+모델파일 mtime 불변을 모두 검증. synthesizer Top 3.",
+    "commit": "74015d1"
+  },
+  {
+    "timestamp": "2026-11-16_1521",
+    "proposal": "storage.py predictions 테이블 인덱스를 idx_predictions_coin(coin, predicted_at DESC)/idx_predictions_unresolved(resolved) 단독 인덱스에서 (coin, resolved, predicted_at DESC)/(resolved, predicted_at DESC) 복합 인덱스로 교체 + model_trainings에 timestamp 단독 인덱스 추가",
+    "role": "storage",
+    "decision": "applied",
+    "reason": "데이터(행)를 전혀 바꾸지 않는 순수 인덱스 재구성(DDL)으로 스키마 마이그레이션(기존 데이터 변환)이 아님. DROP INDEX IF EXISTS + CREATE INDEX IF NOT EXISTS로 기존 trading.db에도 다음 프로세스 재시작 시 자동 적용되며 멱등성 확인. 임시 DB로 add_prediction/resolve_predictions/prediction_accuracy/model_training_history 동작 동일성과 EXPLAIN QUERY PLAN으로 새 인덱스 사용을 검증. synthesizer 차순위.",
+    "commit": "28c749a"
+  },
+  {
+    "timestamp": "2026-11-16_1521",
+    "proposal": "portfolio.py apply_buy_signal()에 손실 포지션(avg_cost_krw보다 낮은 현재가)에서 BUY 신호의 fraction을 감쇠(예: 0.5배)시켜 반복 매수(물타기)를 완화",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "매수 비율(베팅 비율)을 바꾸는 매매 핵심 판단. 리포트 자체가 '적정 감쇠 계수는 백테스트 없이는 과도/부족 여부를 판단하기 어렵다'고 명시(판단 기준 5번).",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1521",
+    "proposal": "portfolio.py STOP_LOSS_PCT(8% 단일 상수)를 코인별 변동성에 비례한 override dict(예: BTC 6%, DOGE 12%)로 차등화",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "손절 기준을 바꾸는 매매 핵심 판단(판단 기준 5번이 예시로 명시). 전략 간 비교의 '동일 조건' 전제와 충돌 가능성도 있어 실제 순효과는 백테스트/실거래 데이터가 필요.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1521",
+    "proposal": "Portfolio에 peak_value_krw 필드를 추가해 최대낙폭(MDD)을 사이클마다 기록",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "리포트가 명시한 대로 스키마 변경이며 기존에 저장된 포트폴리오/스냅샷 문서에는 값이 없어 하위호환 처리(마이그레이션)가 필요함(판단 기준 3번 제외 대상).",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1521",
+    "proposal": "storage.py portfolios 테이블의 PRIMARY KEY를 strategy 단일 문자열('xxx__reset' 인코딩)에서 (strategy, variant) 복합키로 분리",
+    "role": "storage",
+    "decision": "skipped",
+    "reason": "리포트가 명시한 대로 기존 trading.db의 strategy 컬럼 값을 1회성으로 마이그레이션(분리)해야 하고 호출부(main_loop.py/dashboard.py)도 동시에 바꿔야 해 운영 중단/데이터 변환 리스크가 큼(판단 기준 3번 제외 대상). 리포트도 '당장 급하지 않으면 보류' 권고.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1521",
+    "proposal": "predictions/model_trainings 같은 append-only 테이블에 보관주기(retention)/삭제 또는 아카이브 로직 도입",
+    "role": "storage",
+    "decision": "skipped",
+    "reason": "리포트 자체가 '실제로 문제가 되는 시점(파일 용량, 쿼리 실측 속도)은 운영 중인 trading.db 실데이터를 봐야 판단 가능'이라고 명시(판단 기준 4번 제외 대상).",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1521",
+    "proposal": "BollingerRSIStrategy.signal()에 최소 거래량 필터(최근 bb_period 평균 거래량 대비 현재 거래량이 30% 미만이면 HOLD) 추가",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "진입/청산 조건을 바꾸는 매매 핵심 판단. 리포트가 '과도하게 보수적인 임계값은 수익 기회 상실로 이어질 수 있다'는 트레이드오프를 명시해 순효과는 실거래 데이터 검증이 필요함(판단 기준 5번).",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1521",
+    "proposal": "ma_cross_rsi/macd_momentum/trend_follow 3개 전략이 모두 추세추종형으로 상관관계가 높은지, 포트폴리오 자본 배분 로직(learner.py)이 이를 반영하는지 별도 확인",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "구체적 코드 변경 제안이 아니라 추가 조사/확인 요청이며, 다른 리포트에서도 전략 수를 늘리거나 배분을 바꾸자는 구체안이 없어 이번 회차에는 반영할 코드 변경 대상이 없음. 다음 회차 포트폴리오 구성 논의로 남김.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1521",
+    "proposal": "LSTM build_features에 기준 코인(BTC) 동시간 수익률 등 코인 간 상관관계 피처 추가",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "리포트가 '실제 코인별 예측력 개선 여부는 실제 운영 데이터로 검증 필요'라고 명시(판단 기준 4번 제외 대상). 입력 차원 증가로 과적합 위험도 있어 보수적으로 보류.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-16_1521",
+    "proposal": "MACD(12,26,9)/Bollinger(20,2.0)/RSI(14) 등 일봉 관행 파라미터가 1분봉에서도 적절한지 재검토",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "리포트 자체가 '실제 이 값들이 1분봉에서 잘 작동하는지는 백테스트/실운영 데이터로만 확인 가능'이라고 명시(판단 기준 4번 제외 대상).",
+    "commit": null
   }
 ]
