@@ -295,14 +295,26 @@ def run_one_cycle(conn) -> None:
                     strat.coin = coin
                 if len(df) < strat.min_bars():
                     continue
-                signal_, confidence = strat.signal_with_confidence(df)
-                signals[coin] = (signal_, confidence)
-                price = prices_krw[coin]
+                try:
+                    # 코인 단위로도 격리한다 (analysis_team execution 리포트
+                    # 2026-11-16_1422 제안). 위의 전략 단위 try/except만으로는,
+                    # 예를 들어 ADA의 LSTM 모델 파일이 손상되어 predict_proba나
+                    # signal_with_confidence에서 예외가 나면 이미 신호를 계산한
+                    # BTC/ETH 등 나머지 코인들까지 이번 사이클에서 strat_name
+                    # 전체가 건너뛰어졌다. 코인 하나의 장애가 같은 전략의 다른
+                    # 코인들까지 막지 않도록, 신호 계산을 코인별로도 감싼다.
+                    signal_, confidence = strat.signal_with_confidence(df)
+                    signals[coin] = (signal_, confidence)
+                    price = prices_krw[coin]
 
-                if strat_name == "lstm_predictor":
-                    prob_up = lstm_model.predict_proba(coin, df)
-                    if prob_up is not None:
-                        storage.add_prediction(conn, coin, now, prob_up, price)
+                    if strat_name == "lstm_predictor":
+                        prob_up = lstm_model.predict_proba(coin, df)
+                        if prob_up is not None:
+                            storage.add_prediction(conn, coin, now, prob_up, price)
+                except Exception as e:
+                    log.exception(f"[{strat_name}/{coin}] 신호 계산 중 에러, 이 코인만 이번 "
+                                   f"사이클 건너뜀 (같은 전략의 다른 코인에는 영향 없음): {e}")
+                    continue
 
             for mode, pf in portfolios.items():
                 # 1) 손절/강제청산 체크를 신호 적용보다 먼저 한다 — 이번 사이클의
