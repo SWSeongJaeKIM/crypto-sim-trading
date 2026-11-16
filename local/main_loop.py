@@ -367,50 +367,61 @@ def main():
     log.info(f"대상 코인: {COINS}")
     log.info(f"전략: {STRATEGY_NAMES}")
 
-    with storage.connect() as conn:
-        # 최초 1회: LSTM 모델이 하나도 없으면 바로 학습부터.
-        # while 루프 안의 재학습은 try/except로 보호되지만 이 최초 학습은
-        # 보호가 없어서, 데이터 수집 실패 등으로 예외가 나면 프로그램 전체가
-        # 죽는 문제가 있었다 — 모델 없이도 일단 매매 루프(신호는 HOLD로만
-        # 나가지만 조건식 전략은 정상 동작)는 돌 수 있게 여기서도 막는다.
-        has_any_model = any((lstm_model.MODEL_DIR / f"{c}_lstm.pt").exists() for c in COINS)
-        if not has_any_model:
-            log.info("저장된 LSTM 모델이 없어 최초 학습을 먼저 수행합니다 (몇 분 걸릴 수 있음)...")
-            try:
+    # 중요: 커넥션을 while 루프 전체에서 재사용하지 않는다. storage.connect()는
+    # with 블록을 빠져나갈 때(= 루프 전체가 끝날 때)만 commit하는 context
+    # manager라서, 여기서 한 번만 열면 프로그램이 종료될 때까지 하나의 쓰기
+    # 트랜잭션이 영원히 안 끝난 채로 유지된다 — 그동안 dashboard.py 등 다른
+    # 프로세스가 같은 trading.db에 쓰려고 하면 "database is locked"가 난다.
+    # 그래서 사이클/재학습 등 "한 단위의 작업"마다 매번 새로 connect해서
+    # 그 단위가 끝나면 즉시 commit+close 하도록 바꿨다.
+
+    # 최초 1회: LSTM 모델이 하나도 없으면 바로 학습부터.
+    # while 루프 안의 재학습은 try/except로 보호되지만 이 최초 학습은
+    # 보호가 없어서, 데이터 수집 실패 등으로 예외가 나면 프로그램 전체가
+    # 죽는 문제가 있었다 — 모델 없이도 일단 매매 루프(신호는 HOLD로만
+    # 나가지만 조건식 전략은 정상 동작)는 돌 수 있게 여기서도 막는다.
+    has_any_model = any((lstm_model.MODEL_DIR / f"{c}_lstm.pt").exists() for c in COINS)
+    if not has_any_model:
+        log.info("저장된 LSTM 모델이 없어 최초 학습을 먼저 수행합니다 (몇 분 걸릴 수 있음)...")
+        try:
+            with storage.connect() as conn:
                 retrain_lstm(conn)  # 이 안에서 last_lstm_train 메타를 저장함
-            except Exception as e:
-                log.exception(f"최초 LSTM 학습 중 에러 (LSTM 없이 조건식 전략만으로 계속 진행): {e}")
+        except Exception as e:
+            log.exception(f"최초 LSTM 학습 중 에러 (LSTM 없이 조건식 전략만으로 계속 진행): {e}")
 
-        # 메모리 변수가 아니라 storage에 저장된 마지막 재학습 시각으로
-        # 시작한다 — main_loop.py를 재시작해도 "이번 슬롯을 이미 했는지"를 안다.
-        # (바로 위에서 최초 학습을 했다면 그 기록이 여기서 바로 "방금"으로 잡힌다.)
+    # 메모리 변수가 아니라 storage에 저장된 마지막 재학습 시각으로
+    # 시작한다 — main_loop.py를 재시작해도 "이번 슬롯을 이미 했는지"를 안다.
+    # (바로 위에서 최초 학습을 했다면 그 기록이 여기서 바로 "방금"으로 잡힌다.)
+    with storage.connect() as conn:
         last_retrain_at = last_retrain_at_from_storage(conn)
-        if last_retrain_at:
-            log.info(f"마지막 LSTM 재학습: {last_retrain_at} (저장된 기록 기준)")
-        log.info(f"LSTM 재학습 스케줄: 매일 {', '.join(f'{h:02d}:{m:02d}' for h, m in RETRAIN_TIMES_LOCAL)} (하루 {len(RETRAIN_TIMES_LOCAL)}회)")
+    if last_retrain_at:
+        log.info(f"마지막 LSTM 재학습: {last_retrain_at} (저장된 기록 기준)")
+    log.info(f"LSTM 재학습 스케줄: 매일 {', '.join(f'{h:02d}:{m:02d}' for h, m in RETRAIN_TIMES_LOCAL)} (하루 {len(RETRAIN_TIMES_LOCAL)}회)")
 
-        while not _stop:
-            try:
+    while not _stop:
+        try:
+            with storage.connect() as conn:
                 run_one_cycle(conn)
-            except Exception as e:
-                log.exception(f"사이클 실행 중 에러 (스킵하고 계속): {e}")
+        except Exception as e:
+            log.exception(f"사이클 실행 중 에러 (스킵하고 계속): {e}")
 
-            now_local = datetime.now()
-            if retrain_is_due(last_retrain_at):
-                try:
+        now_local = datetime.now()
+        if retrain_is_due(last_retrain_at):
+            try:
+                with storage.connect() as conn:
                     retrain_lstm(conn)
-                    last_retrain_at = now_local
-                except Exception as e:
-                    log.exception(f"LSTM 재학습 중 에러: {e}")
+                last_retrain_at = now_local
+            except Exception as e:
+                log.exception(f"LSTM 재학습 중 에러: {e}")
 
-            retrain_left = _fmt_remaining(time_until_next_retrain(last_retrain_at))
-            analysis_left = _fmt_remaining(time_until_next_cloud_analysis())
-            log.info(f"다음 LSTM 재학습까지 {retrain_left} | 다음 클라우드 분석팀 실행까지 {analysis_left}")
+        retrain_left = _fmt_remaining(time_until_next_retrain(last_retrain_at))
+        analysis_left = _fmt_remaining(time_until_next_cloud_analysis())
+        log.info(f"다음 LSTM 재학습까지 {retrain_left} | 다음 클라우드 분석팀 실행까지 {analysis_left}")
 
-            for _ in range(CYCLE_INTERVAL_SEC):
-                if _stop:
-                    break
-                time.sleep(1)
+        for _ in range(CYCLE_INTERVAL_SEC):
+            if _stop:
+                break
+            time.sleep(1)
 
     log.info("=== 루프 정상 종료 ===")
 

@@ -117,6 +117,13 @@ def connect(db_path: Path | str = DB_PATH):
         conn.executescript(SCHEMA)
         yield conn
         conn.commit()
+    except Exception:
+        # with 블록 안에서 예외가 나면 커밋 전에 여기로 온다. 커밋 안 된
+        # 트랜잭션을 들고 그냥 close()하면 자동 롤백되긴 하지만, 그 사이에
+        # 다른 프로세스가 이 커넥션의 쓰기 잠금을 기다리다 "database is
+        # locked"를 만날 수 있으므로 즉시 명시적으로 롤백해 잠금을 빨리 푼다.
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
