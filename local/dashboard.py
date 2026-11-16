@@ -137,6 +137,7 @@ PAGE = """
   th, td { text-align:left; padding:6px 8px; border-bottom:1px solid #2a2d35; }
   th { color:#9aa0a6; font-weight:500; }
   .buy { color:#4ade80; } .sell { color:#f87171; }
+  .short-open { color:#fb923c; } .short-close { color:#60a5fa; } .liquidated { color:#f87171; font-weight:bold; }
   .refresh { color:#60a5fa; font-size:12px; cursor:pointer; }
   .progress-bar { background:#1a1d24; border-radius:10px; padding:12px 14px; margin-bottom:16px; display:flex; align-items:center; gap:10px; }
   .dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
@@ -422,10 +423,22 @@ async function load() {
     // reason에 "확신도 0.64 -> 65%" 형태로 박혀있는 부분만 추출해서 별도 칸에 표시
     const m = (t.reason || '').match(/확신도\\s*([\\d.]+)\\s*->\\s*(\\d+)%/);
     const confCell = m ? `${(parseFloat(m[1])*100).toFixed(0)}% → ${m[2]}%` : '-';
+    // side별 색상/한글 라벨: BUY(롱 매수)=초록, SELL(롱 매도)=빨강,
+    // SHORT_OPEN(숏 진입)=주황, SHORT_CLOSE(숏 청산)=파랑,
+    // *_LIQUIDATED(강제청산/손절)=굵은 빨강으로 눈에 띄게 구분.
+    const sideMeta = {
+      BUY: ['buy', '매수'],
+      SELL: ['sell', '매도'],
+      SHORT_OPEN: ['short-open', '숏 진입'],
+      SHORT_CLOSE: ['short-close', '숏 청산'],
+      LONG_LIQUIDATED: ['liquidated', '롱 강제청산'],
+      SHORT_LIQUIDATED: ['liquidated', '숏 강제청산'],
+    };
+    const [sideClass, sideLabel] = sideMeta[t.side] || ['sell', t.side];
     tbody.innerHTML += `<tr>
       <td>${t.timestamp.slice(0,19).replace('T',' ')}</td>
       <td>${t.strategy}</td><td>${modeLabel}</td><td>${t.coin}</td>
-      <td class="${t.side === 'BUY' ? 'buy' : 'sell'}">${t.side}</td>
+      <td class="${sideClass}">${sideLabel}</td>
       <td>${t.qty.toFixed(4)}</td><td>${Math.round(t.price_krw).toLocaleString()}</td>
       <td style="color:var(--text-secondary, #9aa0a6);font-size:12px;">${confCell}</td>
     </tr>`;

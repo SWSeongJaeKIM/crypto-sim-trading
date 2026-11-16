@@ -259,17 +259,30 @@ def run_one_cycle(conn) -> None:
                     storage.add_prediction(conn, coin, now, prob_up, price)
 
         for mode, pf in portfolios.items():
+            # 1) 손절/강제청산 체크를 신호 적용보다 먼저 한다 — 이번 사이클의
+            # 신호가 뭐든 상관없이, 지금 들고 있는 포지션이 이미 손절선을
+            # 넘었으면 먼저 정리한다 (예: SELL 신호가 또 나와도 숏을 늘리지
+            # 않고, 이미 위험 수준인 포지션부터 끊는다).
+            for coin, price in prices_krw.items():
+                if coin not in pf.slots:
+                    continue
+                stop_reason = pf.check_stop_loss_and_liquidation(coin, price)
+                if stop_reason:
+                    log.warning(f"[{portfolio_key(strat_name, mode)}] {stop_reason}")
+
+            # 2) 신호 적용 (롱/숏 전환은 apply_buy_signal/apply_sell_signal이
+            # 처리 — BUY는 숏 정리 후 롱, SELL은 롱 정리 후 숏).
             for coin, (signal_, confidence) in signals.items():
                 if coin not in pf.slots:
                     continue
                 price = prices_krw[coin]
                 fraction = confidence_to_trade_fraction(confidence)
                 if signal_ == "BUY":
-                    pf.buy(coin, price, pct_of_cash=fraction,
-                           reason=f"{strat_name} BUY (확신도 {confidence:.2f} -> {fraction*100:.0f}%)")
+                    pf.apply_buy_signal(coin, price, fraction,
+                                         reason=f"{strat_name} BUY (확신도 {confidence:.2f} -> {fraction*100:.0f}%)")
                 elif signal_ == "SELL":
-                    pf.sell(coin, price, pct_of_qty=fraction,
-                            reason=f"{strat_name} SELL (확신도 {confidence:.2f} -> {fraction*100:.0f}%)")
+                    pf.apply_sell_signal(coin, price, fraction,
+                                          reason=f"{strat_name} SELL (확신도 {confidence:.2f} -> {fraction*100:.0f}%)")
 
             key = portfolio_key(strat_name, mode)
             storage.set_portfolio(conn, key, pf.to_doc(), now)

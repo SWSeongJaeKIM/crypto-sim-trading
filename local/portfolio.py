@@ -15,6 +15,25 @@
 순수 함수만 제공한다). to_dict()/from_dict()가 그 경계를 담당한다.
 trades는 Portfolio 문서 안에 전체를 담지 않고(문서 크기 제한),
 engine.run_cycle()이 반환하는 new_trades만 별도 "trades" 컬렉션에 쓴다.
+
+== 숏(공매도) 포지션 ==
+바이낸스 선물(USDT-M 퍼프)을 염두에 둔 단순화 모델:
+- 고정 레버리지 LEVERAGE배(기본 3배). 숏 진입 시 "마진"으로 현금 일부를
+  떼어두고, 그 마진의 LEVERAGE배만큼 숏 수량을 잡는다
+  (예: 마진 10만원, 3배 -> 30만원어치 숏 포지션).
+- 평가손익(PnL) = (진입가 - 현재가) / 진입가 * 포지션가치. 가격이 떨어지면
+  이익, 오르면 손실 — 롱과 정반대.
+- 손절(stop-loss): 가격이 진입가 대비 STOP_LOSS_PCT(기본 8%) "불리한" 방향으로
+  움직이면(숏은 가격 상승, 롱은 가격 하락) 자동 청산한다. 레버리지가 걸려있어
+  실제 마진 손실률은 STOP_LOSS_PCT * LEVERAGE(기본 24%)로 더 크다.
+- 강제청산(liquidation): 마진이 완전히 0 이하로 떨어지는 지점
+  (가격이 진입가 대비 1/LEVERAGE, 3배면 약 33.3% 불리한 방향)에 도달하면
+  마진 전액 손실로 강제 청산한다. 손절(8%)이 그보다 훨씬 먼저 걸리므로
+  정상 상황에서는 발생하지 않아야 하는 안전망이고, 체크 누락 등 예외
+  상황에서만 작동하는 최종 방어선이다.
+- 같은 코인 슬롯에서 롱과 숏을 동시에 들지 않는다: BUY 신호가 들어오면
+  숏이 있으면 먼저 청산하고, SELL 신호가 들어오면 롱이 있으면 먼저
+  청산한다 (open_long/open_short가 이 전환을 처리).
 """
 
 from __future__ import annotations
@@ -30,12 +49,17 @@ COINS = ["BTC", "ETH", "XRP", "SOL", "DOGE", "ADA"]
 # 실거래가 아니므로 고정값으로 단순화 (추후 실시간 환율 API로 교체 가능).
 FX_KRW_PER_USDT = 1450.0
 
+# 숏(공매도) 관련 상수. 바이낸스 선물의 "고정 레버리지 + 격리마진"을 단순화한 모델.
+LEVERAGE = 3.0           # 고정 레버리지 (추후 전략별로 다르게 하려면 CoinSlot에 필드 추가)
+STOP_LOSS_PCT = 0.08     # 진입가 대비 이 비율(가격 기준)만큼 불리해지면 자동 청산 (롱/숏 동일)
+LIQUIDATION_PCT = 1.0 / LEVERAGE  # 마진이 0이 되는 이론적 가격 변동률 (3배 -> 약 33.3%)
+
 
 @dataclass
 class Trade:
     timestamp: str
     coin: str
-    side: Literal["BUY", "SELL"]
+    side: Literal["BUY", "SELL", "SHORT_OPEN", "SHORT_CLOSE", "LONG_LIQUIDATED", "SHORT_LIQUIDATED"]
     price_krw: float
     qty: float
     amount_krw: float
@@ -46,9 +70,12 @@ class Trade:
 @dataclass
 class CoinSlot:
     coin: str
-    cash_krw: float          # 이 코인에 배정된 현금(매수 대기 자금)
-    qty: float = 0.0         # 보유 코인 수량
-    avg_cost_krw: float = 0.0  # 평균 매수가(KRW)
+    cash_krw: float          # 이 코인에 배정된 현금(매수 대기 자금 + 숏 마진 포함)
+    qty: float = 0.0         # 보유 코인 수량 (롱)
+    avg_cost_krw: float = 0.0  # 평균 매수가(KRW, 롱)
+    short_qty: float = 0.0        # 숏 포지션 수량 (코인 단위, 항상 0 이상)
+    short_avg_entry_krw: float = 0.0  # 숏 평균 진입가(KRW)
+    short_margin_krw: float = 0.0     # 숏에 걸어둔 마진(현금에서 분리해 보관 중인 금액)
 
 
 @dataclass
@@ -117,15 +144,145 @@ class Portfolio:
         self.updated_at = datetime.now(timezone.utc).isoformat()
         return True
 
+    # ---- 숏(공매도) ----
+
+    def open_short(self, coin: str, price_krw: float, pct_of_cash: float = 1.0, reason: str = "") -> bool:
+        """해당 코인 슬롯의 현금 중 pct_of_cash 비율을 마진으로 잡아 숏 진입(또는 추가).
+        LEVERAGE배만큼의 가상 포지션을 잡는다. 현금이 없으면 False."""
+        slot = self.slots[coin]
+        margin = slot.cash_krw * pct_of_cash
+        if margin <= 0 or slot.cash_krw <= 0:
+            return False
+        notional = margin * LEVERAGE
+        qty = notional / price_krw
+        new_qty = slot.short_qty + qty
+        # 평균 진입가 갱신 (추가 진입 시 가중평균)
+        slot.short_avg_entry_krw = (
+            (slot.short_avg_entry_krw * slot.short_qty + price_krw * qty) / new_qty
+            if new_qty > 0 else 0.0
+        )
+        slot.short_qty = new_qty
+        slot.short_margin_krw += margin
+        slot.cash_krw -= margin
+        self.new_trades.append(Trade(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            coin=coin, side="SHORT_OPEN", price_krw=price_krw, qty=qty,
+            amount_krw=margin, cash_after=slot.cash_krw,
+            reason=f"{reason} [레버리지 {LEVERAGE:.0f}배, 마진 {margin:,.0f}원]",
+        ))
+        self.trade_count += 1
+        self.updated_at = datetime.now(timezone.utc).isoformat()
+        return True
+
+    def close_short(self, coin: str, price_krw: float, pct_of_qty: float = 1.0,
+                     reason: str = "", side_label: str = "SHORT_CLOSE") -> bool:
+        """숏 포지션 중 pct_of_qty 비율만큼 청산. 마진 + 평가손익을 현금으로 되돌린다.
+        손익 = (진입가 - 청산가) * 수량 (가격이 떨어지면 이익, 오르면 손실).
+        마진 전액 손실(강제청산)이면 cash_krw가 그만큼 그대로 줄어든다."""
+        slot = self.slots[coin]
+        qty_to_close = slot.short_qty * pct_of_qty
+        if qty_to_close <= 0 or slot.short_qty <= 0:
+            return False
+        margin_released = slot.short_margin_krw * pct_of_qty
+        pnl = (slot.short_avg_entry_krw - price_krw) * qty_to_close
+        returned = margin_released + pnl
+        # 레버리지 포지션이라 이론상 손실이 마진을 초과할 수 있다 — 격리마진
+        # 방식이므로 반환액이 0 밑으로 내려가지 않게(추가 손실을 현금에서
+        # 더 떼어가지 않게) 막는다. 정상적으로는 손절이 마진 전액 손실보다
+        # 훨씬 먼저 걸리므로(STOP_LOSS_PCT < LIQUIDATION_PCT) 이 경로는
+        # check_stop_loss_and_liquidation()이 손절을 놓쳤을 때만 닿는다.
+        returned = max(0.0, returned)
+        slot.short_qty -= qty_to_close
+        slot.short_margin_krw -= margin_released
+        slot.cash_krw += returned
+        if slot.short_qty <= 1e-12:
+            slot.short_qty = 0.0
+            slot.short_avg_entry_krw = 0.0
+            slot.short_margin_krw = 0.0
+        self.new_trades.append(Trade(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            coin=coin, side=side_label, price_krw=price_krw, qty=qty_to_close,
+            amount_krw=returned, cash_after=slot.cash_krw,
+            reason=f"{reason} [손익 {pnl:+,.0f}원]",
+        ))
+        self.trade_count += 1
+        self.updated_at = datetime.now(timezone.utc).isoformat()
+        return True
+
+    # ---- 신호 해석 (롱/숏 전환) ----
+    # strategies.py/lstm_model.py는 BUY/SELL/HOLD만 낸다 — 숏 개념을 몰라도
+    # 된다. 여기서 "BUY는 숏을 정리하고 롱 방향, SELL은 롱을 정리하고 숏
+    # 방향"으로 해석해 같은 코인 슬롯에 롱/숏을 동시에 들지 않게 한다.
+
+    def apply_buy_signal(self, coin: str, price_krw: float, fraction: float, reason: str = "") -> None:
+        slot = self.slots[coin]
+        if slot.short_qty > 0:
+            self.close_short(coin, price_krw, pct_of_qty=1.0, reason=f"{reason} (숏 정리 후 롱 전환)")
+        self.buy(coin, price_krw, pct_of_cash=fraction, reason=reason)
+
+    def apply_sell_signal(self, coin: str, price_krw: float, fraction: float, reason: str = "") -> None:
+        slot = self.slots[coin]
+        if slot.qty > 0:
+            self.sell(coin, price_krw, pct_of_qty=1.0, reason=f"{reason} (롱 정리 후 숏 전환)")
+        self.open_short(coin, price_krw, pct_of_cash=fraction, reason=reason)
+
+    # ---- 손절 / 강제청산 ----
+    # main_loop.py가 매 사이클(1분)마다 모든 코인에 대해 호출해야 한다.
+    # 신호(BUY/SELL)와 무관하게, 지금 들고 있는 포지션이 손절선을 넘었는지
+    # 가격만 보고 매 사이클 확인한다.
+
+    def check_stop_loss_and_liquidation(self, coin: str, price_krw: float) -> str | None:
+        """현재가 기준으로 롱/숏 포지션의 손절 또는 강제청산 조건을 확인하고,
+        필요하면 즉시 청산한다. 청산이 일어났으면 그 사유 문자열을, 아니면
+        None을 반환한다 (대시보드/로그용)."""
+        slot = self.slots[coin]
+
+        if slot.qty > 0 and slot.avg_cost_krw > 0:
+            loss_pct = (slot.avg_cost_krw - price_krw) / slot.avg_cost_krw
+            if loss_pct >= STOP_LOSS_PCT:
+                self.sell(coin, price_krw, pct_of_qty=1.0,
+                          reason=f"손절 (진입가 대비 {loss_pct*100:.1f}% 하락)")
+                return f"롱 손절: {coin} 진입가 대비 {loss_pct*100:.1f}% 하락"
+
+        if slot.short_qty > 0 and slot.short_avg_entry_krw > 0:
+            loss_pct = (price_krw - slot.short_avg_entry_krw) / slot.short_avg_entry_krw
+            if loss_pct >= LIQUIDATION_PCT:
+                # 안전망: 마진 전액 손실 지점. 손절(STOP_LOSS_PCT)이 항상 더
+                # 먼저 걸려야 하므로 정상 상황에서는 이 분기가 아니라 바로
+                # 아래 손절 분기에서 먼저 청산된다.
+                self.close_short(coin, price_krw, pct_of_qty=1.0,
+                                  reason=f"강제청산 (진입가 대비 {loss_pct*100:.1f}% 상승, 마진 소진)",
+                                  side_label="SHORT_LIQUIDATED")
+                return f"숏 강제청산: {coin} 진입가 대비 {loss_pct*100:.1f}% 상승"
+            if loss_pct >= STOP_LOSS_PCT:
+                self.close_short(coin, price_krw, pct_of_qty=1.0,
+                                  reason=f"손절 (진입가 대비 {loss_pct*100:.1f}% 상승)")
+                return f"숏 손절: {coin} 진입가 대비 {loss_pct*100:.1f}% 상승"
+
+        return None
+
     # ---- 평가 ----
 
     def total_value_krw(self, current_prices_krw: dict[str, float]) -> float:
+        """현금 + 롱 평가금액 + (숏 마진 + 숏 미실현손익). cash_krw에는 숏을
+        열 때 떼어둔 마진이 빠져 있으므로, 마진과 그 위의 미실현손익을 다시
+        더해줘야 전체 평가금액이 맞다. 미실현손익이 마진을 넘는 음수가
+        되더라도(강제청산 전) 여기서는 그대로 보여준다 — 실제 마진 초과
+        손실 제한은 close_short()에서, 손절 체크는 check_stop_loss_and_
+        liquidation()에서 별도로 처리."""
         total = 0.0
         for coin, slot in self.slots.items():
             total += slot.cash_krw
             price = current_prices_krw.get(coin)
             if price is not None:
                 total += slot.qty * price
+                if slot.short_qty > 0:
+                    unrealized_pnl = (slot.short_avg_entry_krw - price) * slot.short_qty
+                    total += slot.short_margin_krw + unrealized_pnl
+            else:
+                # 가격을 모르면 숏 평가는 못 하지만, 최소한 마진(원가)은 더해서
+                # 그 금액이 통째로 사라진 것처럼 보이지 않게 한다.
+                total += slot.short_margin_krw
         return total
 
     def pnl_pct(self, current_prices_krw: dict[str, float]) -> float:
