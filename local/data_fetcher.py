@@ -14,6 +14,7 @@ Upbit API는 분당 요청수 제한이 있으므로 sleep_sec으로 매너를 �
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 import urllib.request
@@ -23,6 +24,8 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
+
+log = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).parent / "data_cache"
 DATA_DIR.mkdir(exist_ok=True)
@@ -201,8 +204,13 @@ def fetch_all_latest_candles(count: int = 200) -> dict[str, pd.DataFrame]:
     def _fetch_one(coin: str) -> tuple[str, pd.DataFrame | None]:
         try:
             return coin, fetch_latest_minute_candles(UPBIT_MARKETS[coin], count=count)
-        except FetchError as e:
-            print(f"[WARN] {coin} 최신 캔들 수집 실패: {e}")
+        except Exception as e:
+            # FetchError(네트워크/HTTP 재시도 소진)뿐 아니라, Upbit 응답 형식이
+            # 예상과 달라 _parse_minute_df 등에서 터지는 KeyError류까지 전부 잡아서
+            # 코인 1개의 오류가 ThreadPoolExecutor를 통해 전파되어 6코인 전체
+            # 수집(fetch_all_latest_candles)을 실패시키지 않도록 한다. 스택트레이스는
+            # logging.exception으로 남겨 원인 진단이 가능하게 한다.
+            log.exception(f"[WARN] {coin} 최신 캔들 수집 실패: {e}")
             return coin, None
 
     with ThreadPoolExecutor(max_workers=len(COINS)) as executor:
@@ -262,9 +270,11 @@ def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=Non
             with print_lock:
                 print(f"[{coin}] {len(df)}개 1분봉 수집 완료")
             return coin, df
-        except FetchError as e:
+        except Exception as e:
+            # 위 _fetch_one과 같은 이유로 FetchError만이 아니라 모든 예외를 잡는다.
+            # 캐시 폴백 분기는 기존과 동일하게 그대로 탄다.
             with print_lock:
-                print(f"[WARN] {coin} 히스토리 수집 실패: {e}, 캐시 확인")
+                log.exception(f"[WARN] {coin} 히스토리 수집 실패: {e}, 캐시 확인")
             if cache_path.exists():
                 return coin, pd.read_csv(cache_path, parse_dates=["open_time"])
             return coin, None
