@@ -256,68 +256,82 @@ def run_one_cycle(conn) -> None:
         log.info(f"LSTM 예측 {n_resolved}건 확정")
 
     for strat_name in STRATEGY_NAMES:
-        if strat_name == "lstm_predictor":
-            strat = lstm_model.LSTMStrategy(coin=None)  # coin은 코인별로 아래서 바꿔 끼움
-        else:
-            params = storage.get_params(conn, strat_name) or ALL_STRATEGIES[strat_name].default_params()
-            strat = ALL_STRATEGIES[strat_name](**params)
-
-        # 신호(BUY/SELL/HOLD)와 확신도는 전략당 1번만 계산하고, reset/cumulative
-        # 두 포트폴리오에 동일하게 적용한다 (매매 판단 로직은 같고, 계좌
-        # 상태만 분리). 확신도(0~1)는 베팅 비율(MIN~MAX_TRADE_FRACTION)로
-        # 변환되어 "얼마나 베팅할지"를 결정한다 — 애매한 신호는 조금만,
-        # 뚜렷한 신호는 많이 움직인다.
-        portfolios = {mode: load_or_new_portfolio(conn, strat_name, mode) for mode in PORTFOLIO_MODES}
-        signals: dict[str, tuple[str, float]] = {}  # coin -> (signal, confidence)
-
-        for coin, df in candles.items():
-            if coin not in prices_krw or df.empty:
-                continue
+        # 전략 하나당 try/except로 격리한다. run_one_cycle() 전체가
+        # storage.connect()의 with 블록(한 트랜잭션) 안에서 도는데, 예전에는
+        # 이 루프 안에서 예외가 하나라도 나면(예: 모델 파일 손상, 전략 내부
+        # 버그) 그 예외가 run_one_cycle()까지 그대로 전파되어 storage.connect()가
+        # rollback()을 호출했다 — 즉 이미 정상적으로 처리되어
+        # set_portfolio/add_trades/add_snapshot까지 호출된 "먼저 도는
+        # 전략들"의 이번 사이클 매매 기록까지 통째로 날아갔다. 전략별로
+        # 감싸서, 하나가 실패해도 이미 처리된 다른 전략들의 commit은 그대로
+        # 살리고 실패한 전략만 이번 사이클 건너뛴다.
+        try:
             if strat_name == "lstm_predictor":
-                strat.coin = coin
-            if len(df) < strat.min_bars():
-                continue
-            signal_, confidence = strat.signal_with_confidence(df)
-            signals[coin] = (signal_, confidence)
-            price = prices_krw[coin]
+                strat = lstm_model.LSTMStrategy(coin=None)  # coin은 코인별로 아래서 바꿔 끼움
+            else:
+                params = storage.get_params(conn, strat_name) or ALL_STRATEGIES[strat_name].default_params()
+                strat = ALL_STRATEGIES[strat_name](**params)
 
-            if strat_name == "lstm_predictor":
-                prob_up = lstm_model.predict_proba(coin, df)
-                if prob_up is not None:
-                    storage.add_prediction(conn, coin, now, prob_up, price)
+            # 신호(BUY/SELL/HOLD)와 확신도는 전략당 1번만 계산하고, reset/cumulative
+            # 두 포트폴리오에 동일하게 적용한다 (매매 판단 로직은 같고, 계좌
+            # 상태만 분리). 확신도(0~1)는 베팅 비율(MIN~MAX_TRADE_FRACTION)로
+            # 변환되어 "얼마나 베팅할지"를 결정한다 — 애매한 신호는 조금만,
+            # 뚜렷한 신호는 많이 움직인다.
+            portfolios = {mode: load_or_new_portfolio(conn, strat_name, mode) for mode in PORTFOLIO_MODES}
+            signals: dict[str, tuple[str, float]] = {}  # coin -> (signal, confidence)
 
-        for mode, pf in portfolios.items():
-            # 1) 손절/강제청산 체크를 신호 적용보다 먼저 한다 — 이번 사이클의
-            # 신호가 뭐든 상관없이, 지금 들고 있는 포지션이 이미 손절선을
-            # 넘었으면 먼저 정리한다 (예: SELL 신호가 또 나와도 숏을 늘리지
-            # 않고, 이미 위험 수준인 포지션부터 끊는다).
-            for coin, price in prices_krw.items():
-                if coin not in pf.slots:
+            for coin, df in candles.items():
+                if coin not in prices_krw or df.empty:
                     continue
-                stop_reason = pf.check_stop_loss_and_liquidation(coin, price)
-                if stop_reason:
-                    log.warning(f"[{portfolio_key(strat_name, mode)}] {stop_reason}")
-
-            # 2) 신호 적용 (롱/숏 전환은 apply_buy_signal/apply_sell_signal이
-            # 처리 — BUY는 숏 정리 후 롱, SELL은 롱 정리 후 숏).
-            for coin, (signal_, confidence) in signals.items():
-                if coin not in pf.slots:
+                if strat_name == "lstm_predictor":
+                    strat.coin = coin
+                if len(df) < strat.min_bars():
                     continue
+                signal_, confidence = strat.signal_with_confidence(df)
+                signals[coin] = (signal_, confidence)
                 price = prices_krw[coin]
-                fraction = confidence_to_trade_fraction(confidence)
-                if signal_ == "BUY":
-                    pf.apply_buy_signal(coin, price, fraction,
-                                         reason=f"{strat_name} BUY (확신도 {confidence:.2f} -> {fraction*100:.0f}%)")
-                elif signal_ == "SELL":
-                    pf.apply_sell_signal(coin, price, fraction,
-                                          reason=f"{strat_name} SELL (확신도 {confidence:.2f} -> {fraction*100:.0f}%)")
 
-            key = portfolio_key(strat_name, mode)
-            storage.set_portfolio(conn, key, pf.to_doc(), now)
-            storage.add_trades(conn, key, pf.new_trades_as_dicts())
-            total_value = pf.total_value_krw(prices_krw)
-            pnl_pct = pf.pnl_pct(prices_krw)
-            storage.add_snapshot(conn, key, now, total_value, pnl_pct)
+                if strat_name == "lstm_predictor":
+                    prob_up = lstm_model.predict_proba(coin, df)
+                    if prob_up is not None:
+                        storage.add_prediction(conn, coin, now, prob_up, price)
+
+            for mode, pf in portfolios.items():
+                # 1) 손절/강제청산 체크를 신호 적용보다 먼저 한다 — 이번 사이클의
+                # 신호가 뭐든 상관없이, 지금 들고 있는 포지션이 이미 손절선을
+                # 넘었으면 먼저 정리한다 (예: SELL 신호가 또 나와도 숏을 늘리지
+                # 않고, 이미 위험 수준인 포지션부터 끊는다).
+                for coin, price in prices_krw.items():
+                    if coin not in pf.slots:
+                        continue
+                    stop_reason = pf.check_stop_loss_and_liquidation(coin, price)
+                    if stop_reason:
+                        log.warning(f"[{portfolio_key(strat_name, mode)}] {stop_reason}")
+
+                # 2) 신호 적용 (롱/숏 전환은 apply_buy_signal/apply_sell_signal이
+                # 처리 — BUY는 숏 정리 후 롱, SELL은 롱 정리 후 숏).
+                for coin, (signal_, confidence) in signals.items():
+                    if coin not in pf.slots:
+                        continue
+                    price = prices_krw[coin]
+                    fraction = confidence_to_trade_fraction(confidence)
+                    if signal_ == "BUY":
+                        pf.apply_buy_signal(coin, price, fraction,
+                                             reason=f"{strat_name} BUY (확신도 {confidence:.2f} -> {fraction*100:.0f}%)")
+                    elif signal_ == "SELL":
+                        pf.apply_sell_signal(coin, price, fraction,
+                                              reason=f"{strat_name} SELL (확신도 {confidence:.2f} -> {fraction*100:.0f}%)")
+
+                key = portfolio_key(strat_name, mode)
+                storage.set_portfolio(conn, key, pf.to_doc(), now)
+                storage.add_trades(conn, key, pf.new_trades_as_dicts())
+                total_value = pf.total_value_krw(prices_krw)
+                pnl_pct = pf.pnl_pct(prices_krw)
+                storage.add_snapshot(conn, key, now, total_value, pnl_pct)
+        except Exception as e:
+            log.exception(f"[{strat_name}] 전략 처리 중 에러, 이번 사이클은 건너뜀 "
+                           f"(이미 처리된 다른 전략들의 매매 기록에는 영향 없음): {e}")
+            continue
 
     storage.set_meta(conn, "status", {"last_run_at": now, "prices_krw": prices_krw, "source": "upbit"})
     log.info(f"사이클 완료 @ {now} | 가격 샘플 BTC={prices_krw.get('BTC')}")
