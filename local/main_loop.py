@@ -89,16 +89,24 @@ def _touch_heartbeat() -> None:
         pass  # 하트비트 파일 쓰기 실패는 워치독만 못 믿게 할 뿐, 매매 자체는 막지 않는다
 
 
-def set_progress(conn, stage: str, detail: str = "", **extra) -> None:
+def set_progress(stage: str, detail: str = "", **extra) -> None:
     """대시보드가 보여줄 '지금 뭐 하고 있는지' 상태. 매 단계 전환마다 갱신.
-    stage: idle | collecting | training | cycle_running | sleeping | error"""
+    stage: idle | collecting | training | cycle_running | sleeping | error
+
+    주의: 커넥션을 파라미터로 받지 않고 매번 자체적으로 짧게 연다. 데이터
+    수집/학습처럼 몇 분씩 걸리는 작업 중에도 이 함수가 자주 호출되는데,
+    만약 바깥에서 전달받은 긴 커넥션에 썼다면 그 작업 전체 시간 동안 DB
+    쓰기 잠금을 들고 있게 되어 동시에 도는 다른 프로세스(main_loop 사이클,
+    dashboard, retrain_now.py 등)가 "database is locked"를 만난다. 매번
+    새로 열고 즉시 commit+close하면 그 순간만 짧게 잠겼다가 바로 풀린다."""
     _touch_heartbeat()
-    storage.set_meta(conn, "progress", {
-        "stage": stage,
-        "detail": detail,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        **extra,
-    })
+    with storage.connect() as conn:
+        storage.set_meta(conn, "progress", {
+            "stage": stage,
+            "detail": detail,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            **extra,
+        })
 
 
 def portfolio_key(strategy_name: str, mode: str) -> str:
@@ -231,14 +239,14 @@ def time_until_next_cloud_analysis() -> timedelta:
 
 def run_one_cycle(conn) -> None:
     now = datetime.now(timezone.utc).isoformat()
-    set_progress(conn, "collecting", "최신 1분봉 수집 중...")
+    set_progress("collecting", "최신 1분봉 수집 중...")
     candles = data_fetcher.fetch_all_latest_candles(count=max(lstm_model.SEQ_LEN + 5, 200))
     if not candles:
         log.warning("캔들 수집 실패 — 이번 사이클 스킵")
-        set_progress(conn, "error", "캔들 수집 실패, 다음 사이클에 재시도")
+        set_progress("error", "캔들 수집 실패, 다음 사이클에 재시도")
         return
 
-    set_progress(conn, "cycle_running", "5개 전략 신호 계산/매매 중...")
+    set_progress("cycle_running", "5개 전략 신호 계산/매매 중...")
 
     prices_krw = {coin: float(df["close"].iloc[-1]) for coin, df in candles.items() if len(df)}
 
@@ -315,51 +323,62 @@ def run_one_cycle(conn) -> None:
     log.info(f"사이클 완료 @ {now} | 가격 샘플 BTC={prices_krw.get('BTC')}")
 
 
-def retrain_lstm(conn) -> None:
+def retrain_lstm() -> None:
+    """LSTM 재학습 1회 실행.
+
+    주의: 커넥션을 파라미터로 받지 않는다. 데이터 수집(네트워크 I/O, 수십초~분)과
+    학습(8 epoch, 수분)은 DB를 전혀 건드리지 않고 돌고, 결과를 실제로 저장해야
+    하는 짧은 순간에만 그때그때 storage.connect()를 연다. 예전에는 이 함수
+    전체가 하나의 커넥션을 받아서 처음부터 끝까지 들고 있었는데, 그러면 이
+    함수가 도는 몇 분 내내 DB 쓰기 잠금이 풀리지 않아 main_loop 사이클이나
+    retrain_now.py를 동시에 돌리면 "database is locked"가 났다."""
     log.info(f"LSTM 재학습 시작 (최근 {HISTORY_DAYS_FOR_TRAIN}일 1분봉)...")
     results = []
 
     def _on_fetch_progress(coin, i, total):
-        set_progress(conn, "training", f"{coin} 데이터 수집 중... ({i}/{total})",
+        set_progress("training", f"{coin} 데이터 수집 중... ({i}/{total})",
                      current_coin=coin, coin_index=i, coin_total=total, train_step="fetching")
 
     history = data_fetcher.fetch_all_minute_history(days=HISTORY_DAYS_FOR_TRAIN, on_progress=_on_fetch_progress)
 
     for i, (coin, df) in enumerate(history.items(), start=1):
-        set_progress(conn, "training", f"{coin} 모델 학습 중... ({i}/{len(history)})",
+        set_progress("training", f"{coin} 모델 학습 중... ({i}/{len(history)})",
                      current_coin=coin, coin_index=i, coin_total=len(history), train_step="fitting")
 
         def _on_epoch(_coin, epoch_idx, total_epochs, _i=i):
-            set_progress(conn, "training", f"{_coin} 모델 학습 중... epoch {epoch_idx}/{total_epochs}",
+            set_progress("training", f"{_coin} 모델 학습 중... epoch {epoch_idx}/{total_epochs}",
                          current_coin=_coin, coin_index=_i, coin_total=len(history), train_step="fitting")
 
         r = lstm_model.train_model(coin, df, epochs=8, history_days=HISTORY_DAYS_FOR_TRAIN, on_epoch=_on_epoch)
         results.append(r)
         log.info(f"  {r}")
         # 학습할 때마다 누적 기록 (덮어쓰지 않음) — 대시보드에서 정확도 추이를 보기 위함
-        storage.add_model_training(conn, {
-            "coin": coin,
-            "timestamp": r.get("timestamp", datetime.now(timezone.utc).isoformat()),
-            "model_type": "lstm_finetune" if r.get("finetuned") else "lstm_initial",
-            "feature_cols": lstm_model.FEATURE_COLS,
-            "seq_len": r.get("seq_len", lstm_model.SEQ_LEN),
-            "history_days": HISTORY_DAYS_FOR_TRAIN,
-            "data_start": r.get("data_start"),
-            "data_end": r.get("data_end"),
-            "n_samples": r.get("n_samples"),
-            "n_train": r.get("n_train"),
-            "n_val": r.get("n_val"),
-            "val_accuracy": r.get("val_accuracy"),
-            "epochs": r.get("epochs"),
-            "trained": r.get("trained", False),
-            "reason": r.get("reason", ""),
-        })
+        # 이 코인 학습이 막 끝난 짧은 순간에만 connect해서 바로 commit+close.
+        with storage.connect() as conn:
+            storage.add_model_training(conn, {
+                "coin": coin,
+                "timestamp": r.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                "model_type": "lstm_finetune" if r.get("finetuned") else "lstm_initial",
+                "feature_cols": lstm_model.FEATURE_COLS,
+                "seq_len": r.get("seq_len", lstm_model.SEQ_LEN),
+                "history_days": HISTORY_DAYS_FOR_TRAIN,
+                "data_start": r.get("data_start"),
+                "data_end": r.get("data_end"),
+                "n_samples": r.get("n_samples"),
+                "n_train": r.get("n_train"),
+                "n_val": r.get("n_val"),
+                "val_accuracy": r.get("val_accuracy"),
+                "epochs": r.get("epochs"),
+                "trained": r.get("trained", False),
+                "reason": r.get("reason", ""),
+            })
 
-    storage.set_meta(conn, "last_lstm_train", {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "results": results,
-    })
-    set_progress(conn, "idle", "학습 완료, 대기 중")
+    with storage.connect() as conn:
+        storage.set_meta(conn, "last_lstm_train", {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "results": results,
+        })
+    set_progress("idle", "학습 완료, 대기 중")
 
 
 def main():
@@ -384,8 +403,7 @@ def main():
     if not has_any_model:
         log.info("저장된 LSTM 모델이 없어 최초 학습을 먼저 수행합니다 (몇 분 걸릴 수 있음)...")
         try:
-            with storage.connect() as conn:
-                retrain_lstm(conn)  # 이 안에서 last_lstm_train 메타를 저장함
+            retrain_lstm()  # 이 안에서 last_lstm_train 메타를 저장함 (내부에서 짧게 connect)
         except Exception as e:
             log.exception(f"최초 LSTM 학습 중 에러 (LSTM 없이 조건식 전략만으로 계속 진행): {e}")
 
@@ -408,8 +426,7 @@ def main():
         now_local = datetime.now()
         if retrain_is_due(last_retrain_at):
             try:
-                with storage.connect() as conn:
-                    retrain_lstm(conn)
+                retrain_lstm()  # 내부에서 단계별로 짧게 connect — 재학습 도는 동안 DB를 안 잡음
                 last_retrain_at = now_local
             except Exception as e:
                 log.exception(f"LSTM 재학습 중 에러: {e}")
