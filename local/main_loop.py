@@ -472,11 +472,18 @@ def main():
 
         now_local = datetime.now()
         if retrain_is_due(last_retrain_at):
+            # 재학습 동안 run_one_cycle()이 동기적으로 멈추는 공백 구간의 실제 길이를
+            # run.log에서 가늠할 수 있도록 소요 시간을 기록한다.
+            # (analysis_team 리포트 2026-11-16_1521_execution.md)
+            _retrain_started = time.monotonic()
             try:
                 retrain_lstm()  # 내부에서 단계별로 짧게 connect — 재학습 도는 동안 DB를 안 잡음
                 last_retrain_at = now_local
             except Exception as e:
                 log.exception(f"LSTM 재학습 중 에러: {e}")
+            finally:
+                log.info(f"LSTM 재학습 소요 시간: {time.monotonic() - _retrain_started:.1f}초 "
+                          f"(이 구간 동안 매매 사이클은 멈춰 있었음)")
 
         retrain_left = _fmt_remaining(time_until_next_retrain(last_retrain_at))
         analysis_left = _fmt_remaining(time_until_next_cloud_analysis())
