@@ -33,6 +33,13 @@ from strategies import rsi, macd, bollinger
 MODEL_DIR = Path(__file__).parent / "models"
 MODEL_DIR.mkdir(exist_ok=True)
 
+# GPU(CUDA)가 있으면 학습에 사용 — 30일치 데이터(코인당 약 4만 샘플) x 6코인
+# x 8epoch이라 느린 PC에서는 체감 차이가 크다. 없으면 자동으로 CPU로
+# 폴백하므로 이 모듈은 GPU 유무와 상관없이 그대로 동작한다. 추론
+# (predict_proba, 매분 호출)은 forward pass 한 번뿐이라 원래부터 CPU로도
+# 충분하지만, 모델이 이미 GPU에 있으니 추론도 같은 디바이스에서 수행한다.
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 SEQ_LEN = 60          # 과거 60분을 보고 다음 1분을 예측
 NEUTRAL_BAND = 0.0005  # 0.05% 이내 변동은 학습 라벨에서 제외 (노이즈 방지)
 PROB_BUY_MIN = 0.55    # 상승확률 55% 이상이면 BUY
@@ -139,24 +146,26 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
     X_train, X_val = X[:split], X[split:]
     y_train, y_val = y[:split], y[split:]
 
-    model = LSTMClassifier()
+    model = LSTMClassifier().to(DEVICE)
     existing_path = MODEL_DIR / f"{coin}_lstm.pt"
     resumed_from_existing = finetune and existing_path.exists()
     if resumed_from_existing:
-        model.load_state_dict(torch.load(existing_path, map_location="cpu"))
+        # map_location=DEVICE: 예전에 CPU로 저장된 모델이든, 다른 디바이스에서
+        # 저장된 모델이든 지금 실행 중인 디바이스(GPU/CPU)로 바로 올라오게 한다.
+        model.load_state_dict(torch.load(existing_path, map_location=DEVICE))
 
     opt = torch.optim.Adam(model.parameters(), lr=lr)
     loss_fn = nn.BCEWithLogitsLoss()
 
-    X_train_t = torch.from_numpy(X_train)
-    y_train_t = torch.from_numpy(y_train)
-    X_val_t = torch.from_numpy(X_val)
-    y_val_t = torch.from_numpy(y_val)
+    X_train_t = torch.from_numpy(X_train).to(DEVICE)
+    y_train_t = torch.from_numpy(y_train).to(DEVICE)
+    X_val_t = torch.from_numpy(X_val).to(DEVICE)
+    y_val_t = torch.from_numpy(y_val).to(DEVICE)
 
     model.train()
     n_batches = max(1, len(X_train) // batch_size)
     for epoch in range(epochs):
-        perm = torch.randperm(len(X_train))
+        perm = torch.randperm(len(X_train), device=DEVICE)
         for b in range(n_batches):
             idx = perm[b * batch_size: (b + 1) * batch_size]
             if len(idx) == 0:
@@ -167,8 +176,8 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
             loss.backward()
             opt.step()
         if on_epoch:
-            # 느린 PC에서 데이터량이 커져(30일치) 코인당 학습이 오래 걸릴 때,
-            # 워치독(watchdog.bat)의 하트비트가 코인 단위로만 찍히면 간극이
+            # 데이터량이 커지면(90일치) 코인당 학습이 오래 걸릴 수 있어,
+            # run.py(구 watchdog)의 하트비트가 코인 단위로만 찍히면 간극이
             # 너무 벌어질 수 있어 epoch 단위로도 찍을 수 있게 콜백을 열어둔다.
             on_epoch(coin, epoch + 1, epochs)
 
@@ -178,9 +187,12 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
         val_pred = (torch.sigmoid(val_logits) > 0.5).float()
         val_acc = (val_pred == y_val_t).float().mean().item()
 
-    torch.save(model.state_dict(), existing_path)
+    # 저장은 항상 CPU 텐서로 — GPU 없는 다른 PC/환경에서도 그대로
+    # load_state_dict가 가능하게 디바이스에 종속되지 않는 파일로 남긴다.
+    cpu_state = {k: v.cpu() for k, v in model.state_dict().items()}
+    torch.save(cpu_state, existing_path)
     date_str = pd.Timestamp.now().strftime("%Y-%m-%d")
-    torch.save(model.state_dict(), HISTORY_DIR / f"{coin}_lstm_{date_str}.pt")
+    torch.save(cpu_state, HISTORY_DIR / f"{coin}_lstm_{date_str}.pt")
 
     _loaded_models.pop(coin, None)  # 추론 캐시 무효화 (다음 predict_proba가 새 가중치 로드)
 
@@ -209,6 +221,11 @@ _loaded_models: dict[str, LSTMClassifier] = {}
 
 
 def _load_model(coin: str) -> LSTMClassifier | None:
+    """추론용 모델은 의도적으로 항상 CPU에 둔다. predict_proba는 매분,
+    시퀀스 1개짜리 forward pass만 하는 가벼운 연산이라, 매번 CPU<->GPU로
+    데이터를 옮기는 비용이 계산 자체보다 더 클 수 있다. 학습(train_model)만
+    DEVICE(GPU 있으면 GPU)를 쓰고, 저장은 항상 CPU 텐서로 통일해둔 덕분에
+    여기서는 추가 변환 없이 바로 CPU로 로드할 수 있다."""
     path = MODEL_DIR / f"{coin}_lstm.pt"
     if not path.exists():
         return None

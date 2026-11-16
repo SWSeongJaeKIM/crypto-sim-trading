@@ -148,7 +148,7 @@ GPU 없어도 된다 (CPU로 충분 — LSTM이 아주 작은 모델이라 1분 
 터미널 2개를 띄운다 (또는 백그라운드로):
 
 ```bash
-# 터미널 1: 매매 엔진 (계속 실행) — 멈추면 자동 재시작하는 watchdog.py 사용 권장, 아래 참고
+# 터미널 1: 매매 엔진 (계속 실행) — 멈추면 자동 재시작하는 run.py 사용 권장, 아래 참고
 python3 main_loop.py
 
 # 터미널 2: 대시보드
@@ -165,7 +165,7 @@ python3 dashboard.py
 
 ### 워치독 — 멈추면 자동 재시작
 
-`python3 main_loop.py`를 직접 켜는 대신 `python3 watchdog.py`를 실행하면,
+`python3 main_loop.py`를 직접 켜는 대신 `python3 run.py`를 실행하면,
 워치독이 `main_loop.py`를 자식 프로세스로 띄워두고 감시하다가 다음 두
 경우에 **자동으로 강제 종료 후 재시작**한다 (Windows/Mac/Linux 공통,
 순수 Python이라 OS나 인코딩 문제 없음):
@@ -177,7 +177,7 @@ python3 dashboard.py
 
 ```bash
 # 터미널 1: main_loop.py 대신 이걸 실행
-python3 watchdog.py
+python3 run.py
 
 # 터미널 2: 대시보드 (그대로)
 python3 dashboard.py
@@ -186,7 +186,7 @@ python3 dashboard.py
 - 터미널 창 하나에 워치독과 main_loop.py의 로그가 같이 찍힌다(워치독이
   main_loop.py의 표준출력을 그대로 물려받아 보여줌). 끄려면 그 창에서
   Ctrl+C — 워치독이 main_loop.py 자식 프로세스까지 같이 정리하고 종료한다.
-- 감시 주기/임계값을 바꾸려면 `watchdog.py` 상단의 `STALE_SECONDS`,
+- 감시 주기/임계값을 바꾸려면 `run.py` 상단의 `STALE_SECONDS`,
   `CHECK_INTERVAL_SEC` 값을 수정.
 
 ## 24시간 계속 돌리기

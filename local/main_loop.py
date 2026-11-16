@@ -40,8 +40,11 @@ from strategies import ALL_STRATEGIES
 MIN_TRADE_FRACTION = 0.1      # 확신도가 낮을 때(0.0) 베팅 비율 — 그래도 조금은 움직임
 MAX_TRADE_FRACTION = 0.9      # 확신도가 높을 때(1.0) 베팅 비율
 CYCLE_INTERVAL_SEC = 60       # 매매 사이클 주기 (1분봉이므로 60초)
-RETRAIN_TIMES_LOCAL = [(6, 0), (18, 30)]  # 매일 이 (시,분) 두 번(로컬 시간) LSTM 재학습
-HISTORY_DAYS_FOR_TRAIN = 30   # LSTM 학습에 쓸 최근 일수
+RETRAIN_TIMES_LOCAL = [
+    (0, 0), (2, 24), (4, 48), (7, 12), (9, 36),
+    (12, 0), (14, 24), (16, 48), (19, 12), (21, 36),
+]  # 매일 이 (시,분) 10번(로컬 시간, 2시간24분 간격 균등분할) LSTM 재학습 — GPU 사용으로 재학습 비용이 줄어 더 자주 돌림
+HISTORY_DAYS_FOR_TRAIN = 90   # LSTM 학습에 쓸 최근 일수 — GPU 사용으로 더 많은 데이터 처리 가능해져 30일->90일로 확대
 STRATEGY_NAMES = list(ALL_STRATEGIES.keys()) + ["lstm_predictor"]
 RESET_DAYS = 7                # "리셋" 포트폴리오를 며칠마다 1000만원으로 초기화할지
 PORTFOLIO_MODES = ["reset", "cumulative"]
@@ -139,7 +142,7 @@ def _fmt_remaining(delta: timedelta) -> str:
 
 def _retrain_slots_today(now_local: datetime) -> list[datetime]:
     """오늘 날짜 기준 RETRAIN_TIMES_LOCAL 각 (시,분)을 datetime으로 변환한 목록.
-    RETRAIN_TIMES_LOCAL은 시간순으로 정렬돼 있다고 가정(기본: 06:00, 18:30)."""
+    RETRAIN_TIMES_LOCAL은 시간순으로 정렬돼 있다고 가정(기본: 2시간24분 간격 10회)."""
     return [
         now_local.replace(hour=h, minute=m, second=0, microsecond=0)
         for h, m in RETRAIN_TIMES_LOCAL
@@ -160,7 +163,7 @@ def _last_due_slot(now_local: datetime) -> datetime:
 def retrain_is_due(last_retrain_at) -> bool:
     """지금 LSTM 재학습을 돌려야 하는지 판단.
 
-    하루 2번(기본 06:00, 18:30) 각 슬롯에 대해 "그 슬롯 시각이 이미 지났는데
+    하루 10번(기본 2시간24분 간격) 각 슬롯에 대해 "그 슬롯 시각이 이미 지났는데
     아직 그 슬롯만큼의 재학습을 안 했다"로 판단한다. "지금이 정확히 그
     시각이다"로 판단하면 PC가 꺼져 있거나 재시작 등으로 그 1분을 놓치는
     순간 다음 슬롯까지 영영 재학습을 못 하게 되는 문제가 있었다.

@@ -1,7 +1,8 @@
 """
-main_loop.py를 감시하는 워치독. main_loop.py 대신 이 파일을 실행하면:
+main_loop.py를 감시하는 실행 스크립트. main_loop.py를 직접 실행하는 대신
+이 파일을 실행하면 된다:
 
-  python3 watchdog.py
+  python3 run.py
 
 main_loop.py가 자기 자신이 멈췄다는 걸 알 방법은 없다(진짜로 멈추면
 그 안의 코드 자체가 더 이상 실행되지 않으므로). 그래서 이 워치독을
