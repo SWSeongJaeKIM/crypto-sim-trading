@@ -40,6 +40,41 @@ from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "trading.db"
 
+# portfolios 테이블은 strategy TEXT 하나만 PK로 가지므로, reset/cumulative
+# 구분은 호출부가 "<strategy>__<variant>" 형태로 조립/역파싱해왔다. 이 조립·
+# 파싱 로직이 main_loop.py와 dashboard.py에 각자 흩어져 있던 것을 여기 한
+# 곳으로 모은다 (DB 스키마/기존 데이터는 전혀 바꾸지 않음 — analysis_team
+# 리포트 2026-11-16_1619_storage.md 제안).
+PORTFOLIO_KEY_SEP = "__"
+
+
+def make_portfolio_key(strategy: str, variant: str) -> str:
+    """portfolios.strategy 컬럼에 쓰는 합성 키를 만든다. 기존에 main_loop.py가
+    썼던 f"{strategy_name}__{mode}"와 동일한 포맷."""
+    return f"{strategy}{PORTFOLIO_KEY_SEP}{variant}"
+
+
+def parse_portfolio_key(key: str) -> tuple[str, str]:
+    """make_portfolio_key()의 역함수. 구분자가 없거나 뒤쪽이 reset/cumulative가
+    아닌 경우(옛 데이터, 예상 밖의 키)는 (key, "cumulative")로 안전하게
+    폴백한다 — main_loop.py/dashboard.py가 기존에 각자 구현했던 폴백과 동일."""
+    strategy, sep, variant = key.rpartition(PORTFOLIO_KEY_SEP)
+    if not sep or variant not in ("reset", "cumulative"):
+        return key, "cumulative"
+    return strategy, variant
+
+
+def db_file_size_mb() -> float:
+    """현재 trading.db 파일 크기(MB). predictions/model_trainings 같은
+    append-only 테이블의 보관주기(prune)가 실제로 필요한 시점인지 사람이
+    숫자로 판단할 수 있게 하는 관측용 헬퍼 — 스키마나 기존 데이터는 전혀
+    건드리지 않는다 (analysis_team 리포트 2026-11-16_1619_storage.md 제안)."""
+    try:
+        return DB_PATH.stat().st_size / 1024 / 1024
+    except OSError:
+        return 0.0
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS portfolios (
     strategy TEXT PRIMARY KEY,

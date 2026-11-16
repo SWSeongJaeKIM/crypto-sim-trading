@@ -119,8 +119,10 @@ def set_progress(stage: str, detail: str = "", **extra) -> None:
 
 def portfolio_key(strategy_name: str, mode: str) -> str:
     """storage의 portfolios 테이블은 strategy 하나를 PK로 쓰므로,
-    '<strategy>__<mode>' 형태로 이름 공간을 나눠 reset/cumulative를 구분한다."""
-    return f"{strategy_name}__{mode}"
+    storage.make_portfolio_key()로 '<strategy>__<mode>' 형태의 이름 공간을
+    만들어 reset/cumulative를 구분한다 (조립 로직을 storage.py 한 곳으로
+    모음 — analysis_team 리포트 2026-11-16_1619_storage.md)."""
+    return storage.make_portfolio_key(strategy_name, mode)
 
 
 def load_or_new_portfolio(conn, strategy_name: str, mode: str = "cumulative") -> Portfolio:

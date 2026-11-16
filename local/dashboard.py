@@ -381,8 +381,9 @@ async function loadAnalysis() {
 async function load() {
   const res = await fetch('/api/data');
   const d = await res.json();
+  const dbSizeLabel = d.db_size_mb !== undefined ? ` | DB 크기: ${d.db_size_mb}MB` : '';
   document.getElementById('status').innerText =
-    `마지막 갱신: ${d.meta?.last_run_at || '-'} | 현재가 BTC=${Math.round(d.meta?.prices_krw?.BTC || 0).toLocaleString()}원`;
+    `마지막 갱신: ${d.meta?.last_run_at || '-'} | 현재가 BTC=${Math.round(d.meta?.prices_krw?.BTC || 0).toLocaleString()}원${dbSizeLabel}`;
 
   const p = d.progress || {};
   const dot = document.getElementById('progress-dot');
@@ -544,9 +545,10 @@ def api_data():
         portfolios = []
         for name, doc in portfolios_raw.items():
             # name은 "<strategy>__reset" 또는 "<strategy>__cumulative" 형태.
-            strategy, _, mode = name.rpartition("__")
-            if mode not in ("reset", "cumulative"):
-                strategy, mode = name, "cumulative"  # 혹시 옛 데이터가 남아있으면 누적으로 간주
+            # 조립/역파싱 로직은 storage.parse_portfolio_key()로 통일 (옛 데이터나
+            # 예상 밖의 키는 기존과 동일하게 (name, "cumulative")로 폴백한다 —
+            # analysis_team 리포트 2026-11-16_1619_storage.md).
+            strategy, mode = storage.parse_portfolio_key(name)
             total = sum(s["cash_krw"] + s["qty"] * prices.get(c, 0) for c, s in doc["slots"].items())
             initial = doc["initial_capital_krw"]
             pnl = (total / initial - 1.0) * 100
@@ -563,12 +565,12 @@ def api_data():
 
         trades = storage.recent_trades(conn, limit=20)
         for t in trades:
-            strategy, _, mode = t["strategy"].rpartition("__")
-            if mode in ("reset", "cumulative"):
-                t["strategy"] = strategy
-                t["mode"] = mode
-            else:
-                t["mode"] = "cumulative"
+            # storage.parse_portfolio_key()가 유효하지 않은 키는 (원래 문자열,
+            # "cumulative")로 폴백하므로, strategy를 그대로 덮어써도 기존
+            # if/else 분기와 동일한 결과가 된다.
+            strategy, mode = storage.parse_portfolio_key(t["strategy"])
+            t["strategy"] = strategy
+            t["mode"] = mode
 
         # 코인별 최근 10회, 화면엔 시간순(과거->최신)으로 묶어서 내려줘야
         # 프론트에서 "이전 대비 ▲▼" 추이 계산이 바로 된다.
@@ -579,9 +581,15 @@ def api_data():
 
         prediction_accuracy = storage.prediction_accuracy_by_coin(conn)
 
+    # predictions/model_trainings 보관주기가 실제로 필요한 시점인지 판단할
+    # 관측 지표 (analysis_team 리포트 2026-11-16_1619_storage.md 제안).
+    # 스키마/데이터는 건드리지 않는 순수 조회이므로 connect() 블록 밖에서도 안전.
+    db_size_mb = round(storage.db_file_size_mb(), 2)
+
     return jsonify({"meta": meta, "progress": progress, "portfolios": portfolios,
                      "trades": trades, "trainings": trainings,
-                     "prediction_accuracy": prediction_accuracy})
+                     "prediction_accuracy": prediction_accuracy,
+                     "db_size_mb": db_size_mb})
 
 
 if __name__ == "__main__":
