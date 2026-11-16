@@ -161,8 +161,14 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
 
     n = len(X)
     split = int(n * (1 - val_frac))
-    X_train, X_val = X[:split], X[split:]
-    y_train, y_val = y[:split], y[split:]
+    # build_dataset은 겹치는 슬라이딩 윈도우(seq_len분)로 샘플을 만들기 때문에,
+    # split 경계 바로 앞 train 샘플과 바로 뒤 val 샘플은 입력 윈도우의 대부분을
+    # 공유한다. train 쪽에서 seq_len개만큼 여유를 둬서 그 겹침을 없애면
+    # val_accuracy가 실제보다 낙관적으로 보이는 걸 줄일 수 있다 (val 샘플 수는
+    # 그대로 유지, train만 경계 근처 일부를 버림 — 전체 샘플 대비 영향은 작음).
+    train_end = max(0, split - seq_len)
+    X_train, X_val = X[:train_end], X[split:]
+    y_train, y_val = y[:train_end], y[split:]
 
     model = LSTMClassifier().to(DEVICE)
     existing_path = MODEL_DIR / f"{coin}_lstm.pt"
