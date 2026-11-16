@@ -1,47 +1,47 @@
 {
-  "generated_at": "2026-11-16_1422",
+  "generated_at": "2026-11-16_1521",
   "roles": {
     "execution": {
       "role": "execution",
       "role_label": "실행/버그 분석가",
-      "timestamp": "2026-11-16_1422",
-      "path": "analysis_team/reports/2026-11-16_1422_execution.md",
-      "summary": "전반적인 예외 격리와 Upbit API 페이지네이션/레이트리밋 처리는 이미 상당히 견고하게 되어 있으나, LSTM 재학습이 메인 루프를 블로킹하는 구조와 전략 내부 코인 단위 예외 격리 부재, 로그 경로 문제가 남아 있다."
+      "timestamp": "2026-11-16_1521",
+      "path": "analysis_team/reports/2026-11-16_1521_execution.md",
+      "summary": "run_one_cycle()의 매매 로직은 전략/코인 단위로 예외를 꼼꼼히 격리해 두었지만, retrain_lstm()의 코인별 학습 루프에는 같은 수준의 격리가 빠져 있어 한 코인 학습 실패가 해당 재학습 슬롯 전체를 날릴 수 있다."
     },
     "lstm": {
       "role": "lstm",
       "role_label": "LSTM 분석가",
-      "timestamp": "2026-11-16_1422",
-      "path": "analysis_team/reports/2026-11-16_1422_lstm.md",
-      "summary": "피처 구성과 모델 규모는 데이터량에 비해 과도하지 않게 설계되어 있으나, 시간대 피처와 코인 간 상관관계 피처가 빠져 있고 재학습 방식은 \"최근 데이터 반영\"보다 \"과거 패턴 유지\" 쪽에 구조적으로 더 기울어 있다."
+      "timestamp": "2026-11-16_1521",
+      "path": "analysis_team/reports/2026-11-16_1521_lstm.md",
+      "summary": "전반적인 모델 구조(SEQ_LEN/LSTMClassifier 크기)와 train/val 분리 로직은 데이터 누수까지 신경 쓴 성숙한 설계지만, 재학습 시 \"더 나빠진 모델도 그냥 덮어쓰는\" 안전장치 부재와 상단 주석의 재학습 주기/데이터기간 서술이 실제 main_loop.py 설정과 어"
     },
     "risk": {
       "role": "risk",
       "role_label": "리스크 분석가",
-      "timestamp": "2026-11-16_1422",
-      "path": "analysis_team/reports/2026-11-16_1422_risk.md",
-      "summary": "자금 배분 구조(코인별 격리 + 확신도 기반 베팅)는 전체 포트폴리오 집중 리스크를 비교적 잘 억제하고 있으나, 손실 중 추가 매수가 손절 기준선 자체를 낮춰버리는 구조적 물타기 위험과, 코인별 변동성을 반영하지 않는 고정 손절폭이 보완할 지점으로 보인다."
+      "timestamp": "2026-11-16_1521",
+      "path": "analysis_team/reports/2026-11-16_1521_risk.md",
+      "summary": "TRADE_FRACTION으로 인한 전역 집중 리스크는 코인별 슬롯 격리 구조 덕에 이미 잘 억제되어 있으나, 손실 중 반복 매수를 막는 안전장치 부재와 \"동일 금액=동일 리스크\"가 아닌 균등 배분 구조는 여전히 보완 여지가 있다."
     },
     "storage": {
       "role": "storage",
       "role_label": "데이터/저장소 분석가",
-      "timestamp": "2026-11-16_1422",
-      "path": "analysis_team/reports/2026-11-16_1422_storage.md",
-      "summary": "스키마/인덱스는 현재 쿼리 패턴에 잘 맞춰져 있고 WAL+busy_timeout+애플리케이션 레벨 재시도로 동시 읽기/쓰기 경합도 견고하게 처리돼 있으나, `predictions`/`model_trainings`의 무제한 append-only 적재에 보관주기가 없고, `portfolio"
+      "timestamp": "2026-11-16_1521",
+      "path": "analysis_team/reports/2026-11-16_1521_storage.md",
+      "summary": "WAL 모드 + busy_timeout + 애플리케이션 레벨 재시도로 동시성 처리는 이미 잘 돼 있고, 가장 신경 써야 할 부분은 `predictions`/`model_trainings`처럼 계속 쌓이는 테이블에서 \"최신순 정렬 + LIMIT\" 조회가 인덱스를 완전히 못 타는 지점과, "
     },
     "strategy": {
       "role": "strategy",
       "role_label": "전략 분석가",
-      "timestamp": "2026-11-16_1422",
-      "path": "analysis_team/reports/2026-11-16_1422_strategy.md",
-      "summary": "4개 전략의 로직 자체는 각각 타당하지만, MACD 파라미터가 일봉용 고전값을 그대로 쓰고 있고 MACrossRSI와 MACD가 거의 같은 신호를 낼 가능성이 높으며, 급락장·저유동성 구간에 대한 방어 로직이 전혀 없다."
+      "timestamp": "2026-11-16_1521",
+      "path": "analysis_team/reports/2026-11-16_1521_strategy.md",
+      "summary": "4개 조건식의 개별 로직은 표준적이고 타당하지만, RSI 계산 함수의 결함으로 급등/급락장에서 과매수·과매도 신호가 무력화될 수 있고, 거래량 필터 부재와 3개 전략(ma_cross_rsi·macd_momentum·trend_follow)이 모두 추세추종형이라는 구조적 중복이 가장 큰 "
     },
     "synthesizer": {
       "role": "synthesizer",
       "role_label": "종합 조정자",
-      "timestamp": "2026-11-16_1422",
-      "path": "analysis_team/reports/2026-11-16_1422_synthesizer.md",
-      "summary": "**1. run.log 경로를 절대경로로 수정 (execution 제안, main_loop.py:60)**"
+      "timestamp": "2026-11-16_1521",
+      "path": "analysis_team/reports/2026-11-16_1521_synthesizer.md",
+      "summary": "1. **RSI 극단값 처리 버그 수정** (strategy) — avg_loss=0일 때 RSI가 100이 되어야 하는데 fillna(50.0)로 중립값이 되어 급등/급락장에서 과매수·과매도 신호가 무력화됨. 분기 처리 한 줄 수준으로 수정 가능하면서 신호 정확도 전반에 즉시 영향을 "
     }
   }
 }
