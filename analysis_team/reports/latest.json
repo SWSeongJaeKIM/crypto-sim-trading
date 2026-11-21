@@ -1,47 +1,47 @@
 {
-  "generated_at": "2026-11-21_2221",
+  "generated_at": "2026-11-21_2320",
   "roles": {
     "execution": {
       "role": "execution",
       "role_label": "실행/버그 분석가",
-      "timestamp": "2026-11-21_2221",
-      "path": "analysis_team/reports/2026-11-21_2221_execution.md",
-      "summary": "예외처리/사이클 복구 설계는 전반적으로 견고하며(전략·코인 단위 격리, 재학습 실패 시 재시도 로직 등 과거 분석팀 피드백이 이미 반영됨), 다만 장시간 히스토리 수집 중 페이지 단위 실패 시 기존 수집분을 통째로 버리는 부분과 run.log 로테이션 부재는 구체적으로 개선할 만하다."
+      "timestamp": "2026-11-21_2320",
+      "path": "analysis_team/reports/2026-11-21_2320_execution.md",
+      "summary": "예외처리/로깅/사이클 타이밍 설계는 이미 여러 차례 개선을 거쳐 전반적으로 견고하지만, `run_one_cycle()` 안에서 전략별 try/except 보호를 받지 못하는 두 지점이 있어 그 부분에서 예외가 나면 이미 커밋됐어야 할 다른 전략들의 매매 기록까지 롤백될 수 있다."
     },
     "lstm": {
       "role": "lstm",
       "role_label": "LSTM 분석가",
-      "timestamp": "2026-11-21_2221",
-      "path": "analysis_team/reports/2026-11-21_2221_lstm.md",
-      "summary": "피처·모델 구조·파인튠 안전장치(val_acc 롤백)는 이미 합리적으로 설계돼 있으나, 재학습 주기/기간에 대한 전제가 실제 코드와 다르고, 코인 간 상관관계 피처가 비교적 적은 비용으로 추가 가능한데 빠져 있다."
+      "timestamp": "2026-11-21_2320",
+      "path": "analysis_team/reports/2026-11-21_2320_lstm.md",
+      "summary": "피처 구성과 모델 크기, 파인튠 안전장치는 문제 난이도(1분봉 방향 예측)에 맞게 이미 신중하게 설계되어 있고, 남은 개선 여지는 \"다른 코인 상관관계\" 피처 추가와 파인튠 체인 자동 리셋 정책 부재 두 가지입니다."
     },
     "risk": {
       "role": "risk",
       "role_label": "리스크 분석가",
-      "timestamp": "2026-11-21_2221",
-      "path": "analysis_team/reports/2026-11-21_2221_risk.md",
-      "summary": "자금 배분/슬롯 구조 자체는 집중 리스크를 잘 막고 있으나, 평균단가 기반 손절 로직이 \"물타기 매수\" 상황에서 손절선을 함께 끌어내려 보호 기능이 약해지는 문제가 있고, 코인별 변동성 차이와 장기 리스크(MDD 등)를 반영하는 지표가 코드에 없다."
+      "timestamp": "2026-11-21_2320",
+      "path": "analysis_team/reports/2026-11-21_2320_risk.md",
+      "summary": "매매 비중(TRADE_FRACTION)은 실제로 고정 50%가 아니라 확신도 기반 10~90% 가변 구조이며, 가장 눈에 걸리는 리스크는 \"물타기 시 손절 기준선이 평균매수가를 따라 계속 재설정되는 구조\"와 \"리셋 시 열린 포지션을 시장가 청산 없이 그냥 폐기하는 구조\" 두 가지입니다."
     },
     "storage": {
       "role": "storage",
       "role_label": "데이터/저장소 분석가",
-      "timestamp": "2026-11-21_2221",
-      "path": "analysis_team/reports/2026-11-21_2221_storage.md",
-      "summary": "WAL 모드, 복합 인덱스, 재시도 로직, `predictions` 보관주기(prune) 등 핵심 동시성/성능 이슈는 이미 코드 내 주석(analysis_team 리포트 인용)으로 반복 개선되어 있어 전반적으로 양호하며, 남은 공백은 `snapshots`/`model_trainings`"
+      "timestamp": "2026-11-21_2320",
+      "path": "analysis_team/reports/2026-11-21_2320_storage.md",
+      "summary": "이전 여러 라운드에서 지적된 append-only 누적(predictions/snapshots), 쿼리 인덱스 커버리지, 동시성(WAL+재시도), portfolios 키 네이밍 문제는 모두 이미 코드에 반영되어 있어 추가로 손댈 급한 문제는 없고, 남은 개선 여지는 WAL 커밋 비용(s"
     },
     "strategy": {
       "role": "strategy",
       "role_label": "전략 분석가",
-      "timestamp": "2026-11-21_2221",
-      "path": "analysis_team/reports/2026-11-21_2221_strategy.md",
-      "summary": "4개 조건식 각각의 진입/청산 로직 자체는 교과서적으로 타당하지만, 거래량을 전혀 쓰지 않는 공통 구조적 공백과 두 전략(MA크로스·MACD) 간 신호 중복 가능성이 가장 눈에 띈다."
+      "timestamp": "2026-11-21_2320",
+      "path": "analysis_team/reports/2026-11-21_2320_strategy.md",
+      "summary": "4개 조건식의 진입 로직 자체는 논리적으로 합당하지만, MACD 파라미터가 일봉 기본값을 그대로 쓰고 있어 ma_cross_rsi와 신호가 겹치고, 4개 전략 모두 거래량(volume)을 전혀 보지 않아 급등락·거래량 바닥 구간에서 오작동할 소지가 있습니다."
     },
     "synthesizer": {
       "role": "synthesizer",
       "role_label": "종합 조정자",
-      "timestamp": "2026-11-21_2221",
-      "path": "analysis_team/reports/2026-11-21_2221_synthesizer.md",
-      "summary": "1. **전략 공통 거래량 필터 추가 (strategy)** — ma_cross_rsi, bollinger_rsi, macd_momentum, trend_follow 4개 전략 모두 거래량을 전혀 참조하지 않아 1분봉 저유동성 구간의 스파이크/위크에 취약하다. Strategy 베이스클래"
+      "timestamp": "2026-11-21_2320",
+      "path": "analysis_team/reports/2026-11-21_2320_synthesizer.md",
+      "summary": "5개 리포트가 각기 다른 코드 영역(전략 로직, 모델, 실행 루프, 저장소, 리스크 관리)을 다뤄 직접 겹치는 제안은 거의 없었습니다. 그중 \"효과 대비 난이도\"가 가장 낮은 세 가지를 선정했습니다."
     }
   }
 }
