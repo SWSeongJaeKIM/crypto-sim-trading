@@ -424,6 +424,26 @@ def prune_predictions(conn, keep_days: int = 90) -> int:
     return cur.rowcount if cur.rowcount is not None and cur.rowcount > 0 else 0
 
 
+def prune_snapshots(conn, keep_days: int = 365) -> int:
+    """snapshots도 predictions와 동일하게 append-only로 사이클마다(1분 간격)
+    전략 x 모드(reset/cumulative)별로 1행씩 영구 누적되는데, predictions만
+    보관주기가 있고 snapshots는 빠져 있던 비일관성을 해소한다 (analysis_team
+    리포트 2026-11-21_2221_storage.md). recent_snapshots()/learner.recent_performance()는
+    항상 "최근 N개"(기본 30개)만 조회하므로 오래된 행을 지워도 튜닝 로직에는
+    영향이 없다. predictions(90일)보다 keep_days를 길게(기본 365일) 잡은 것은,
+    사람이 대시보드 등에서 장기 pnl 추이를 직접 들여다볼 수 있는 여지를
+    predictions보다 넉넉히 남기기 위함(해당 리포트의 권고). timestamp는
+    add_snapshot()이 저장하는 ISO8601 UTC 문자열이라 문자열 비교로도 시간
+    순서가 맞는다(prune_predictions와 동일한 방식).
+    반환값: 삭제된 행 수."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).isoformat()
+    cur = conn.execute(
+        "DELETE FROM snapshots WHERE timestamp < ?",
+        (cutoff,),
+    )
+    return cur.rowcount if cur.rowcount is not None and cur.rowcount > 0 else 0
+
+
 def prediction_accuracy(conn, coin: str | None = None, limit: int = 500) -> dict:
     """확정된(resolved=1) 예측들의 적중률 요약. coin 생략하면 전체 코인 합산."""
     if coin:

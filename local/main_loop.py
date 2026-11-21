@@ -49,6 +49,10 @@ PREDICTIONS_PRUNE_KEEP_DAYS = 90  # predictions 테이블에서 확정(resolved=
                                    # 하루 1회 삭제 (analysis_team 리포트 2026-11-21_2118_storage.md,
                                    # synthesizer Top3 #3) — 안 그러면 사이클마다(1분 간격) 영구
                                    # 누적되어 DB 파일 크기가 무한정 커진다.
+SNAPSHOTS_PRUNE_KEEP_DAYS = 365   # snapshots 테이블도 predictions와 동일한 append-only 누적
+                                   # 패턴이라 보관주기를 둔다 (analysis_team 리포트
+                                   # 2026-11-21_2221_storage.md). predictions(90일)보다 길게 잡아
+                                   # 장기 pnl 추이를 직접 확인할 여지를 더 남겨둔다.
 STRATEGY_NAMES = list(ALL_STRATEGIES.keys()) + ["lstm_predictor"]
 RESET_DAYS = 7                # "리셋" 포트폴리오를 며칠마다 1000만원으로 초기화할지
 PORTFOLIO_MODES = ["reset", "cumulative"]
@@ -559,6 +563,10 @@ def main():
             try:
                 with storage.connect() as conn:
                     n_pruned = storage.prune_predictions(conn, keep_days=PREDICTIONS_PRUNE_KEEP_DAYS)
+                    # predictions와 동일한 비일관성(append-only 무한 누적)이 snapshots에도
+                    # 있어 같은 유지보수 시점에 같이 정리한다 (analysis_team 리포트
+                    # 2026-11-21_2221_storage.md).
+                    n_pruned_snapshots = storage.prune_snapshots(conn, keep_days=SNAPSHOTS_PRUNE_KEEP_DAYS)
                     # WAL 파일도 함께 줄인다 — 다른 커넥션이 몰려 있으면 부분적으로만
                     # 체크포인트되고 예외 없이 끝나므로 트레이딩 사이클에 안전하다.
                     conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -566,11 +574,13 @@ def main():
                         "date": today_str,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                         "rows_deleted": n_pruned,
+                        "snapshots_rows_deleted": n_pruned_snapshots,
                     })
                 last_prune_date = today_str
-                log.info(f"predictions 보관주기 정리 완료: {n_pruned}건 삭제 (keep_days={PREDICTIONS_PRUNE_KEEP_DAYS})")
+                log.info(f"predictions 보관주기 정리 완료: {n_pruned}건 삭제 (keep_days={PREDICTIONS_PRUNE_KEEP_DAYS}), "
+                         f"snapshots {n_pruned_snapshots}건 삭제 (keep_days={SNAPSHOTS_PRUNE_KEEP_DAYS})")
             except Exception as e:
-                log.exception(f"predictions 보관주기 정리 중 에러 (다음 사이클에 재시도): {e}")
+                log.exception(f"predictions/snapshots 보관주기 정리 중 에러 (다음 사이클에 재시도): {e}")
 
         retrain_left = _fmt_remaining(time_until_next_retrain(last_retrain_at))
         analysis_left = _fmt_remaining(time_until_next_cloud_analysis())
