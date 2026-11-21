@@ -98,6 +98,18 @@ _stop = False
 # execution 리포트 2026-11-16_1718 제안).
 _warned_missing_model: set[str] = set()
 
+# run_one_cycle()의 코인별 except(아래)에서 FileNotFoundError 외의 "반복되는"
+# 예외(예: 모델 파일 손상으로 인한 RuntimeError, 특정 코인 데이터 형태 문제로
+# 전략 내부에서 매 사이클 계속 터지는 예외)에 대해, 매 사이클(1분 간격)마다
+# 전체 스택트레이스를 log.exception으로 반복 적재하지 않도록 한다. 키는
+# (전략, 코인, 예외타입)이고 값은 마지막으로 전체 트레이스를 남긴 시각이다.
+# FileNotFoundError와 달리 "조용히 끄기"가 아니라 "일정 시간마다 1회만 전체
+# 트레이스, 그 사이엔 짧은 warning"으로 완화한다 — 실제로 지속되는 문제를
+# 운영자가 너무 늦게 알아차리는 위험을 줄이기 위함이다 (analysis_team
+# execution 리포트 2026-11-21_2320 제안).
+_warned_repeated_exception: dict[tuple[str, str, str], float] = {}
+_REPEATED_EXCEPTION_LOG_INTERVAL_SEC = 3600  # 1시간(60사이클)마다 전체 트레이스 1회
+
 
 def _handle_sigint(signum, frame):
     global _stop
@@ -373,8 +385,21 @@ def run_one_cycle(conn) -> None:
                         _warned_missing_model.add(coin)
                     continue
                 except Exception as e:
-                    log.exception(f"[{strat_name}/{coin}] 신호 계산 중 에러, 이 코인만 이번 "
-                                   f"사이클 건너뜀 (같은 전략의 다른 코인에는 영향 없음): {e}")
+                    # FileNotFoundError(위)와 달리 "조용히"가 아니라 "N초마다 1회만
+                    # 전체 트레이스" — 예외 타입까지 키에 포함해, 같은 코인에서
+                    # 다른 종류의 새 문제가 생기면 그건 바로 전체 트레이스로
+                    # 남긴다(analysis_team execution 리포트 2026-11-21_2320 제안).
+                    repeat_key = (strat_name, coin, type(e).__name__)
+                    last_logged = _warned_repeated_exception.get(repeat_key)
+                    now_mono = time.monotonic()
+                    if last_logged is None or (now_mono - last_logged) >= _REPEATED_EXCEPTION_LOG_INTERVAL_SEC:
+                        log.exception(f"[{strat_name}/{coin}] 신호 계산 중 에러, 이 코인만 이번 "
+                                       f"사이클 건너뜀 (같은 전략의 다른 코인에는 영향 없음): {e}")
+                        _warned_repeated_exception[repeat_key] = now_mono
+                    else:
+                        log.warning(f"[{strat_name}/{coin}] 신호 계산 중 에러 반복 중 (같은 종류 "
+                                     f"{_REPEATED_EXCEPTION_LOG_INTERVAL_SEC}초 내 전체 트레이스는 "
+                                     f"이미 남겼음, 이 코인만 이번 사이클 건너뜀): {type(e).__name__}: {e}")
                     continue
 
             for mode, pf in portfolios.items():
