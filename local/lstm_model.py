@@ -235,11 +235,21 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
     # 은 비교 대상(기존 가중치)이 없으므로 항상 저장한다.
     meta_path = MODEL_DIR / f"{coin}_lstm_meta.json"
     prev_val_acc = None
+    # "영구 이어학습(finetune=True 기본값)" 구조에서는 전체 재학습(finetune=False)이
+    # 언제 한 번 일어났는지 호출부(main_loop.py)가 알 방법이 없었다 — 이 파일
+    # 안에는 그런 리셋을 스스로 트리거하는 로직도 없다 (analysis_team 리포트
+    # 2026-11-21_2118_lstm.md 제안). finetune_chain_length를 meta에 남겨서,
+    # 연속 파인튠 횟수를 추적할 수 있게 한다. 학습 자체(가중치/lr/저장 로직)는
+    # 전혀 바꾸지 않고, 관측 가능한 메타데이터만 추가하는 변경이다.
+    prev_chain_length = 0
     if resumed_from_existing and meta_path.exists():
         try:
-            prev_val_acc = json.loads(meta_path.read_text()).get("val_accuracy")
+            prev_meta = json.loads(meta_path.read_text())
+            prev_val_acc = prev_meta.get("val_accuracy")
+            prev_chain_length = prev_meta.get("finetune_chain_length", 0)
         except (json.JSONDecodeError, OSError):
             prev_val_acc = None
+            prev_chain_length = 0
 
     should_save = True
     skip_reason = None
@@ -249,6 +259,12 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
                         f"(임계값 {VAL_ACC_ROLLBACK_THRESHOLD})")
         log.warning(f"[{coin}] {skip_reason} — 기존 가중치 유지, 저장 생략")
 
+    # 이번 학습이 파인튠(이어학습)이면 체인을 1 늘리고, 전체 재학습(처음부터
+    # 새로 초기화해서 학습)이면 0으로 리셋한다. 몇 회 연속 파인튠됐는지가
+    # 쌓이므로, 나중에 사람이 "N회 이상이면 전체 재학습" 같은 정책을 메타만
+    # 보고 판단할 수 있다 — 이 변경 자체는 그런 정책을 자동으로 적용하지 않는다.
+    finetune_chain_length = (prev_chain_length + 1) if resumed_from_existing else 0
+
     if should_save:
         # 저장은 항상 CPU 텐서로 — GPU 없는 다른 PC/환경에서도 그대로
         # load_state_dict가 가능하게 디바이스에 종속되지 않는 파일로 남긴다.
@@ -256,7 +272,11 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
         torch.save(cpu_state, existing_path)
         date_str = pd.Timestamp.now().strftime("%Y-%m-%d")
         torch.save(cpu_state, HISTORY_DIR / f"{coin}_lstm_{date_str}.pt")
-        meta_path.write_text(json.dumps({"val_accuracy": val_acc, "timestamp": timestamp}))
+        meta_path.write_text(json.dumps({
+            "val_accuracy": val_acc,
+            "timestamp": timestamp,
+            "finetune_chain_length": finetune_chain_length,
+        }))
 
         _loaded_models.pop(coin, None)  # 추론 캐시 무효화 (다음 predict_proba가 새 가중치 로드)
 
@@ -273,6 +293,7 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
         "n_val": len(X_val),
         "val_accuracy": round(val_acc, 4),
         "prev_val_accuracy": prev_val_acc,
+        "finetune_chain_length": finetune_chain_length if should_save else prev_chain_length,
         "epochs": epochs,
         "timestamp": timestamp,
         "data_start": data_start,
