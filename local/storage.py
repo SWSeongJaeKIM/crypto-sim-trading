@@ -36,6 +36,7 @@ import json
 import time
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "trading.db"
@@ -404,6 +405,23 @@ def resolve_predictions(conn, current_prices_krw: dict[str, float]) -> int:
             updates,
         )
     return len(updates)
+
+
+def prune_predictions(conn, keep_days: int = 90) -> int:
+    """predictions는 append-only로 사이클마다(설계상 1분 간격) 1행씩 영구
+    누적되어 DB 파일 크기가 무한정 커진다 (analysis_team 리포트
+    2026-11-21_2118_storage.md, synthesizer Top3 #3). 확정(resolved=1)되고
+    keep_days일보다 오래된 행만 지운다 — 아직 확정 안 된(resolved=0) 행은
+    건드리지 않아 resolve_predictions()의 다음 확정 처리에 영향이 없다.
+    predicted_at은 ISO8601 UTC 문자열이라 문자열 비교로도 시간 순서가
+    맞는다 (add_prediction()이 저장하는 형식과 동일).
+    반환값: 삭제된 행 수."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).isoformat()
+    cur = conn.execute(
+        "DELETE FROM predictions WHERE resolved = 1 AND predicted_at < ?",
+        (cutoff,),
+    )
+    return cur.rowcount if cur.rowcount is not None and cur.rowcount > 0 else 0
 
 
 def prediction_accuracy(conn, coin: str | None = None, limit: int = 500) -> dict:

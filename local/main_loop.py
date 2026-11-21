@@ -45,6 +45,10 @@ RETRAIN_TIMES_LOCAL = [
     (12, 0), (14, 24), (16, 48), (19, 12), (21, 36),
 ]  # 매일 이 (시,분) 10번(로컬 시간, 2시간24분 간격 균등분할) LSTM 재학습 — GPU 사용으로 재학습 비용이 줄어 더 자주 돌림
 HISTORY_DAYS_FOR_TRAIN = 90   # LSTM 학습에 쓸 최근 일수 — GPU 사용으로 더 많은 데이터 처리 가능해져 30일->90일로 확대
+PREDICTIONS_PRUNE_KEEP_DAYS = 90  # predictions 테이블에서 확정(resolved=1)되고 이보다 오래된 행을
+                                   # 하루 1회 삭제 (analysis_team 리포트 2026-11-21_2118_storage.md,
+                                   # synthesizer Top3 #3) — 안 그러면 사이클마다(1분 간격) 영구
+                                   # 누적되어 DB 파일 크기가 무한정 커진다.
 STRATEGY_NAMES = list(ALL_STRATEGIES.keys()) + ["lstm_predictor"]
 RESET_DAYS = 7                # "리셋" 포트폴리오를 며칠마다 1000만원으로 초기화할지
 PORTFOLIO_MODES = ["reset", "cumulative"]
@@ -235,6 +239,16 @@ def last_retrain_at_from_storage(conn) -> datetime | None:
     if ts.tzinfo is not None:
         ts = ts.astimezone().replace(tzinfo=None)  # UTC -> 로컬 타임존(naive)
     return ts
+
+
+def last_predictions_prune_date_from_storage(conn) -> str | None:
+    """storage에 저장된 last_predictions_prune 메타에서 마지막으로 predictions
+    보관주기 정리를 실행한 로컬 날짜(YYYY-MM-DD)를 읽어온다. 기록이 없으면 None
+    (한 번도 실행 안 함 — 바로 오늘 실행하게 됨)."""
+    meta = storage.get_meta(conn, "last_predictions_prune")
+    if not meta:
+        return None
+    return meta.get("date")
 
 
 def confidence_to_trade_fraction(confidence: float) -> float:
@@ -501,6 +515,7 @@ def main():
     # (바로 위에서 최초 학습을 했다면 그 기록이 여기서 바로 "방금"으로 잡힌다.)
     with storage.connect() as conn:
         last_retrain_at = last_retrain_at_from_storage(conn)
+        last_prune_date = last_predictions_prune_date_from_storage(conn)
     if last_retrain_at:
         log.info(f"마지막 LSTM 재학습: {last_retrain_at} (저장된 기록 기준)")
     log.info(f"LSTM 재학습 스케줄: 매일 {', '.join(f'{h:02d}:{m:02d}' for h, m in RETRAIN_TIMES_LOCAL)} (하루 {len(RETRAIN_TIMES_LOCAL)}회)")
@@ -535,6 +550,27 @@ def main():
                 log.info(f"LSTM 재학습 소요 시간: {time.monotonic() - _retrain_started:.1f}초 "
                           f"(이 구간 동안 매매 사이클은 멈춰 있었음)")
                 _warned_missing_model.clear()  # 재학습을 시도했으니 결손 상태가 바뀌었을 수 있어 경고 기록 초기화
+
+        today_str = now_local.strftime("%Y-%m-%d")
+        if last_prune_date != today_str:
+            # 하루 1회만(날짜가 바뀐 첫 사이클에서) predictions 보관주기 정리를
+            # 실행한다. 거래/손절 판단에 쓰는 로직은 전혀 건드리지 않고,
+            # 이미 확정된(resolved=1) 오래된 예측 기록만 지운다.
+            try:
+                with storage.connect() as conn:
+                    n_pruned = storage.prune_predictions(conn, keep_days=PREDICTIONS_PRUNE_KEEP_DAYS)
+                    # WAL 파일도 함께 줄인다 — 다른 커넥션이 몰려 있으면 부분적으로만
+                    # 체크포인트되고 예외 없이 끝나므로 트레이딩 사이클에 안전하다.
+                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                    storage.set_meta(conn, "last_predictions_prune", {
+                        "date": today_str,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "rows_deleted": n_pruned,
+                    })
+                last_prune_date = today_str
+                log.info(f"predictions 보관주기 정리 완료: {n_pruned}건 삭제 (keep_days={PREDICTIONS_PRUNE_KEEP_DAYS})")
+            except Exception as e:
+                log.exception(f"predictions 보관주기 정리 중 에러 (다음 사이클에 재시도): {e}")
 
         retrain_left = _fmt_remaining(time_until_next_retrain(last_retrain_at))
         analysis_left = _fmt_remaining(time_until_next_cloud_analysis())
