@@ -144,6 +144,13 @@ def fetch_minute_history(market: str, days: int = 14, sleep_sec: float = 0.12,
     cutoff = pd.Timestamp.now() - pd.Timedelta(days=days)
     if max_pages is None:
         max_pages = int(days * 1440 / 200 * 1.2) + 5
+    # 목표 페이지 수(마진 20% 포함 전) 대비 80% 이상을 이미 모은 상태에서
+    # 한 페이지가 실패하면, 전체를 버리지 않고 그때까지 모은 부분 데이터로
+    # 정상 반환한다 (analysis_team 리포트 2026-11-21_2221_execution.md).
+    # 그 이전에(너무 적게 모은 상태에서) 실패하면 기존과 동일하게 예외를
+    # 그대로 전파해 fetch_all_minute_history()의 캐시 폴백 경로를 그대로 탄다.
+    _expected_pages = days * 1440 / 200
+    _min_pages_for_partial = int(_expected_pages * 0.8)
     all_rows: list[dict] = []
     to_param = ""
     prev_to_param = None
@@ -155,7 +162,22 @@ def fetch_minute_history(market: str, days: int = 14, sleep_sec: float = 0.12,
         url = f"{UPBIT_BASE}/v1/candles/minutes/1?market={market}&count=200"
         if to_param:
             url += f"&to={to_param}"
-        raw = _http_get_json(url)
+        try:
+            raw = _http_get_json(url)
+        except FetchError:
+            # 예전에는 이 예외가 그대로 fetch_minute_history() 밖으로 전파되어,
+            # 650페이지 중 649페이지까지 모아둔 all_rows까지 통째로 버려지고
+            # fetch_all_minute_history()가 디스크 캐시(최대 2시간24분 전)로
+            # 전체 대체했다. 이미 충분히(목표의 80% 이상) 모았다면 그 부분
+            # 데이터를 그대로 쓰는 쪽이 낫다.
+            if page_idx - 1 >= _min_pages_for_partial:
+                log.warning(
+                    f"{market} 페이지 {page_idx}/{max_pages} 수집 중 실패했지만 "
+                    f"이미 {page_idx - 1}페이지(목표 ~{_expected_pages:.0f}페이지의 "
+                    f"{(page_idx - 1) / _expected_pages:.0%}) 모았으므로 부분 데이터로 반환합니다."
+                )
+                break
+            raise
         if not raw:
             break
         all_rows.extend(raw)
