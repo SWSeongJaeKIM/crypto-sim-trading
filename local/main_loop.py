@@ -23,6 +23,7 @@ Claude/인터넷상의 AI를 전혀 호출하지 않는다. 이 파일 하나를
 from __future__ import annotations
 
 import logging
+import logging.handlers
 import signal
 import sys
 import time
@@ -72,7 +73,15 @@ logging.basicConfig(
         # OS 서비스가 local/이 아닌 다른 작업 디렉토리에서 프로세스를 띄우면
         # 모듈 docstring이 말하는 "local/run.log"와 다른 위치에 로그가 생겨
         # 문제 진단 시 로그를 못 찾는 문제가 있었다.
-        logging.FileHandler(Path(__file__).parent / "run.log", encoding="utf-8"),
+        # 24/7 상주 루프라 회전(rotation) 없이는 run.log가 수개월~수년간
+        # 끝없이 커진다 (analysis_team 리포트 2026-11-21_2221_execution.md).
+        # 10MB마다 회전, 과거분 5개(최대 약 50MB)까지만 보존한다 — 기존
+        # FileHandler와 같은 파일에 같은 포맷으로 계속 추가(append)되므로
+        # 재시작 시 동작은 그대로이고, 다음 회전 시점부터만 분할된다.
+        logging.handlers.RotatingFileHandler(
+            Path(__file__).parent / "run.log", encoding="utf-8",
+            maxBytes=10 * 1024 * 1024, backupCount=5,
+        ),
     ],
 )
 log = logging.getLogger("main_loop")
