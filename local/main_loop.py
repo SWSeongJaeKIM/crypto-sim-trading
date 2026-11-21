@@ -380,7 +380,7 @@ def run_one_cycle(conn) -> None:
     log.info(f"사이클 완료 @ {now} | 가격 샘플 BTC={prices_krw.get('BTC')}")
 
 
-def retrain_lstm() -> None:
+def retrain_lstm() -> bool:
     """LSTM 재학습 1회 실행.
 
     주의: 커넥션을 파라미터로 받지 않는다. 데이터 수집(네트워크 I/O, 수십초~분)과
@@ -443,12 +443,23 @@ def retrain_lstm() -> None:
                 "reason": r.get("reason", ""),
             })
 
-    with storage.connect() as conn:
-        storage.set_meta(conn, "last_lstm_train", {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "results": results,
-        })
+    # analysis_team 리포트 2026-11-21_2118(execution/synthesizer Top3 #1): results가
+    # 전부 trained=False(예: 데이터 수집 전체 실패, 코인별 예외 전부 발생)여도
+    # 여기서 무조건 last_lstm_train을 갱신하면 "실패인데 성공처럼" 기록되어
+    # retrain_is_due()가 다음 슬롯(최대 2시간24분 후)까지 재시도를 막아버린다.
+    # 실제로 하나라도 학습이 성공했을 때만 갱신해서, 전면 실패 시 다음 사이클
+    # (1분 후)에 바로 재시도할 수 있게 한다.
+    any_trained = any(r.get("trained") for r in results)
+    if any_trained:
+        with storage.connect() as conn:
+            storage.set_meta(conn, "last_lstm_train", {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "results": results,
+            })
+    else:
+        log.warning("이번 재학습 슬롯에서 코인이 전부 학습 실패 — last_lstm_train 메타를 갱신하지 않고 다음 사이클에 재시도합니다.")
     set_progress("idle", "학습 완료, 대기 중")
+    return any_trained
 
 
 def main():
@@ -509,8 +520,15 @@ def main():
             # (analysis_team 리포트 2026-11-16_1521_execution.md)
             _retrain_started = time.monotonic()
             try:
-                retrain_lstm()  # 내부에서 단계별로 짧게 connect — 재학습 도는 동안 DB를 안 잡음
-                last_retrain_at = now_local
+                # retrain_lstm()이 내부에서 "하나라도 학습 성공" 여부를 반환한다
+                # (analysis_team 리포트 2026-11-21_2118). 전부 실패했으면 이번
+                # 슬롯을 "완료"로 치지 않고 last_retrain_at을 그대로 둬서, 다음
+                # 사이클(1분 후)에 retrain_is_due()가 다시 True가 되게 한다.
+                any_trained = retrain_lstm()  # 내부에서 단계별로 짧게 connect — 재학습 도는 동안 DB를 안 잡음
+                if any_trained:
+                    last_retrain_at = now_local
+                else:
+                    log.warning("이번 재학습 슬롯 전체 실패 — last_retrain_at을 갱신하지 않아 다음 사이클에 재시도합니다.")
             except Exception as e:
                 log.exception(f"LSTM 재학습 중 에러: {e}")
             finally:
