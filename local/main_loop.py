@@ -298,9 +298,20 @@ def run_one_cycle(conn) -> None:
     prices_krw = {coin: float(df["close"].iloc[-1]) for coin, df in candles.items() if len(df)}
 
     # 지난 사이클에 LSTM이 냈던 예측들을 이번 사이클의 실제가로 확정 (적중여부 계산)
-    n_resolved = storage.resolve_predictions(conn, prices_krw)
-    if n_resolved:
-        log.info(f"LSTM 예측 {n_resolved}건 확정")
+    # try/except로 감싼다 (analysis_team execution 리포트 2026-11-21_2320 제안):
+    # 이 호출이 전략 루프보다 "먼저" 실행되는데, 감싸지 않으면 여기서 예외가
+    # storage.connect()의 with 블록까지 전파되어 rollback()이 호출되고, 아직
+    # 시작도 안 한 전략 루프 자체가 통째로 스킵된다 — 전략별 격리(아래 305번째
+    # 줄부터)를 만든 목적과 같은 이유로, 전략 루프 밖의 이 호출도 보호해야 한다.
+    # 예측 확정은 다음 사이클(1분 후)에도 동일 가격 데이터로 재시도 가능한
+    # 멱등적 동작이라, 이번 사이클에서 조용히 스킵돼도 매매 로직에는 영향이 없다.
+    try:
+        n_resolved = storage.resolve_predictions(conn, prices_krw)
+        if n_resolved:
+            log.info(f"LSTM 예측 {n_resolved}건 확정")
+    except Exception as e:
+        log.exception(f"LSTM 예측 확정 중 에러, 이번 사이클은 스킵 (다음 사이클에 재시도, "
+                       f"전략 매매 로직에는 영향 없음): {e}")
 
     for strat_name in STRATEGY_NAMES:
         # 전략 하나당 try/except로 격리한다. run_one_cycle() 전체가
@@ -403,7 +414,18 @@ def run_one_cycle(conn) -> None:
                            f"(이미 처리된 다른 전략들의 매매 기록에는 영향 없음): {e}")
             continue
 
-    storage.set_meta(conn, "status", {"last_run_at": now, "prices_krw": prices_krw, "source": "upbit"})
+    # try/except로 감싼다 (analysis_team execution 리포트 2026-11-21_2320 제안):
+    # 이 호출은 전략 루프 "뒤"에 있어, 전략별 try/except(위 315번째 줄부터)가
+    # 이미 각 전략의 매매 기록 commit을 보존해준 뒤에도 여기서 예외가 나면
+    # storage.connect()가 그 사이클 전체(이미 처리된 모든 전략의 매매 기록
+    # 포함)를 rollback() 해버린다. status 메타는 대시보드 표시용이고 다음
+    # 사이클에 다시 갱신되는 멱등적 동작이라, 실패해도 조용히 스킵하는 쪽이
+    # 안전하다.
+    try:
+        storage.set_meta(conn, "status", {"last_run_at": now, "prices_krw": prices_krw, "source": "upbit"})
+    except Exception as e:
+        log.exception(f"상태 메타(status) 갱신 중 에러, 이번 사이클은 스킵 (다음 사이클에 재시도, "
+                       f"이미 처리된 전략들의 매매 기록에는 영향 없음): {e}")
     log.info(f"사이클 완료 @ {now} | 가격 샘플 BTC={prices_krw.get('BTC')}")
 
 
