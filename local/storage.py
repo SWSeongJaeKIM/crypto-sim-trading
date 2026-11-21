@@ -229,6 +229,16 @@ def connect(db_path: Path | str = DB_PATH):
     )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    # WAL 모드에서는 synchronous=NORMAL이어도 "커밋된 트랜잭션이 롤백되지
+    # 않는다"는 보장이 유지되면서, 매 커밋마다 걸리던 fsync 비용만 줄어든다
+    # (SQLite 기본값 FULL은 WAL 체크포인트 fsync까지 추가로 강제한다). main_loop가
+    # 1분 사이클마다 커밋을 내는 핫패스라 이 비용이 누적되고, "database is locked"
+    # 재시도 로직(위 참고)이 막으려는 경합 창도 커밋이 가벼워지면 함께 줄어든다.
+    # 유일한 트레이드오프는 애플리케이션 크래시가 아닌 OS/전원 자체의 크래시
+    # 시 마지막 체크포인트 이전 커밋 몇 건이 사라질 이론적 가능성인데, 모의투자
+    # 시스템이라 실거래 자금 손실로 이어지지 않는다 (analysis_team storage
+    # 리포트 2026-11-21_2320 제안).
+    conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
     try:
         if key not in _schema_initialized_paths:
