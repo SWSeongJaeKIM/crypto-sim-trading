@@ -2526,5 +2526,13 @@
     "decision": "applied",
     "reason": "run_one_cycle()의 유일한 호출부(main_loop.py의 main())만 수정하면 되고 다른 파일에서 이 함수를 import/호출하는 곳이 없음을 raw 소스 grep으로 확인 — 시그니처 변경(None -> float|None 반환)의 파급 범위가 이 파일 안으로 한정됨. 매매 로직은 그대로 두고 진단 가시성만 추가하는 변경이라 기존 동작을 깨뜨릴 위험이 낮음. 경고 메시지 포맷을 파이썬으로 직접 실행해 fetch_elapsed가 있을 때/None일 때 모두 올바르게 조립됨을 확인.",
     "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_2118",
+    "proposal": "lstm_model.py train_model()의 VAL_ACC_ROLLBACK_THRESHOLD 비교 기준을 confident_mask(PROB_BUY_MIN/PROB_SELL_MAX 확신 구간)로 계산한 val_accuracy_confident로 전환하고, 최소 샘플 가드(MIN_CONFIDENT_VAL_SAMPLES=30)를 두어 샘플 부족 시 기존 val_accuracy로 폴백",
+    "role": "lstm (synthesizer Top3 #2)",
+    "decision": "applied",
+    "reason": "학습 후 '저장할지' 판단하는 안전장치 로직만 바꾸고 build_features()/predict_proba() 추론 경로는 전혀 건드리지 않아, 코드 배포 즉시 기존 추론 동작이 바뀌는 위험이 없음(차기 재학습 때부터만 새 기준이 적용됨). 실제 매매가 나가는 확신 구간의 정확도로 롤백 기준을 맞추는 것은 '측정 지표와 안전장치 목적의 불일치'라는 명백한 버그 수정이라 코드 리뷰만으로 타당성이 검증됨. numpy로 '전체 정확도는 동일(0.65=0.65)한데 확신구간 정확도만 80%->50%로 붕괴'하는 사례를 구성해, 기존 로직은 저장(should_save=True, 안전장치 공백)하지만 새 로직은 올바르게 롤백(should_save=False)함을 시뮬레이션으로 확인. 샘플 부족 시 fallback('overall' 비교)으로 정확히 빠지는 것도 별도 시나리오로 확인.",
+    "commit": null
   }
 ]

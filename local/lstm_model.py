@@ -68,6 +68,19 @@ PROB_SELL_MAX = 0.40   # 상승확률 40% 이하면 SELL (기존 0.45)
 # 가중치가 과거에 고착(stale)될 수 있어 보수적으로 0.03으로 시작.
 VAL_ACC_ROLLBACK_THRESHOLD = 0.03
 
+# 위 VAL_ACC_ROLLBACK_THRESHOLD 비교는 원래 val_accuracy(sigmoid>0.5라는 "모호한
+# 구간 포함 전체 정확도")를 기준으로 했는데, 실제 매매 신호는 PROB_BUY_MIN(0.60)/
+# PROB_SELL_MAX(0.40) 확신 구간에서만 나간다 — 즉 안전장치가 지키는 지표와 실제로
+# 돈이 걸리는 지표가 서로 달라, 전체 정확도는 유지돼도 확신 구간 정확도만
+# 나빠지는 경우 롤백이 전혀 트리거되지 않을 수 있었다 (analysis_team lstm 리포트
+# 2026-11-22_2118 발견점 #1, synthesizer Top3 #2). 확신 구간만의 정확도
+# (val_accuracy_confident, 아래 train_model 참고)를 계산해 가능하면 그 값으로
+# 롤백을 비교한다. 다만 확신 구간 샘플이 이 값보다 적으면(val set이 작거나
+# 이번 구간 시세가 유난히 모호했던 경우) 소수 샘플만으로 계산한 정확도는 노이즈로
+# 크게 흔들려 불필요한 롤백을 유발할 수 있어, 그럴 때는 기존 val_accuracy로
+# 폴백한다 (같은 리포트의 리스크/트레이드오프 항목에서 제안한 최소 샘플 가드).
+MIN_CONFIDENT_VAL_SAMPLES = 30
+
 FEATURE_COLS = ["ret", "vol_chg", "rsi14", "macd_hist", "bb_pctb"]
 N_FEATURES = len(FEATURE_COLS)
 
@@ -226,8 +239,20 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
     model.eval()
     with torch.no_grad():
         val_logits = model(X_val_t)
-        val_pred = (torch.sigmoid(val_logits) > 0.5).float()
+        val_probs = torch.sigmoid(val_logits)
+        val_pred = (val_probs > 0.5).float()
         val_acc = (val_pred == y_val_t).float().mean().item()
+
+        # 실제 매매 신호는 PROB_BUY_MIN/PROB_SELL_MAX 확신 구간에서만 나가므로,
+        # 그 구간만의 정확도도 따로 계산해둔다 (위 MIN_CONFIDENT_VAL_SAMPLES
+        # 설명 참고). 샘플이 가드값보다 적으면 노이즈가 커서 None으로 둔다.
+        confident_mask = (val_probs >= PROB_BUY_MIN) | (val_probs <= PROB_SELL_MAX)
+        n_confident_val_samples = int(confident_mask.sum().item())
+        val_accuracy_confident = None
+        if n_confident_val_samples >= MIN_CONFIDENT_VAL_SAMPLES:
+            val_accuracy_confident = (
+                val_pred[confident_mask] == y_val_t[confident_mask]
+            ).float().mean().item()
 
     # 이전 저장 모델의 val_accuracy와 비교해, 이번 학습으로 성능이 크게
     # 떨어졌으면 저장을 건너뛰고 기존 가중치를 그대로 유지한다 (아래
@@ -244,6 +269,7 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
     # 자체가 없음)만 비교 대상이 없으므로 항상 저장한다.
     meta_path = MODEL_DIR / f"{coin}_lstm_meta.json"
     prev_val_acc = None
+    prev_val_acc_confident = None
     # "영구 이어학습(finetune=True 기본값)" 구조에서는 전체 재학습(finetune=False)이
     # 언제 한 번 일어났는지 호출부(main_loop.py)가 알 방법이 없었다 — 이 파일
     # 안에는 그런 리셋을 스스로 트리거하는 로직도 없다 (analysis_team 리포트
@@ -255,16 +281,32 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
         try:
             prev_meta = json.loads(meta_path.read_text())
             prev_val_acc = prev_meta.get("val_accuracy")
+            prev_val_acc_confident = prev_meta.get("val_accuracy_confident")
             prev_chain_length = prev_meta.get("finetune_chain_length", 0)
         except (json.JSONDecodeError, OSError):
             prev_val_acc = None
+            prev_val_acc_confident = None
             prev_chain_length = 0
+
+    # 비교 기준: 이전/이번 둘 다 확신 구간 정확도가 충분한 샘플로 계산돼 있으면
+    # (val_accuracy_confident 둘 다 not None) 그 값으로 롤백을 비교한다 — 실제
+    # 매매 임계값 기준의 정확도가 안전장치의 기준이 되어야 하기 때문이다
+    # (analysis_team lstm 리포트 2026-11-22_2118 발견점 #1, synthesizer Top3 #2).
+    # 둘 중 하나라도 없으면(샘플 부족, 또는 이 필드가 아직 없던 과거 모델과
+    # 비교하는 경우) 기존 방식(val_acc, 모호한 구간 포함 전체 정확도)으로
+    # 폴백한다 — 기존 동작을 그대로 유지하는 안전한 기본값.
+    if prev_val_acc_confident is not None and val_accuracy_confident is not None:
+        _compare_label = "val_accuracy_confident"
+        _prev_compare, _curr_compare = prev_val_acc_confident, val_accuracy_confident
+    else:
+        _compare_label = "val_accuracy"
+        _prev_compare, _curr_compare = prev_val_acc, val_acc
 
     should_save = True
     skip_reason = None
-    if existing_path.exists() and prev_val_acc is not None and (prev_val_acc - val_acc) > VAL_ACC_ROLLBACK_THRESHOLD:
+    if existing_path.exists() and _prev_compare is not None and (_prev_compare - _curr_compare) > VAL_ACC_ROLLBACK_THRESHOLD:
         should_save = False
-        skip_reason = (f"val_acc 하락으로 롤백: 이전 {prev_val_acc:.4f} -> 이번 {val_acc:.4f} "
+        skip_reason = (f"{_compare_label} 하락으로 롤백: 이전 {_prev_compare:.4f} -> 이번 {_curr_compare:.4f} "
                         f"(임계값 {VAL_ACC_ROLLBACK_THRESHOLD})")
         log.warning(f"[{coin}] {skip_reason} — 기존 가중치 유지, 저장 생략")
 
@@ -283,6 +325,8 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
         torch.save(cpu_state, HISTORY_DIR / f"{coin}_lstm_{date_str}.pt")
         meta_path.write_text(json.dumps({
             "val_accuracy": val_acc,
+            "val_accuracy_confident": val_accuracy_confident,
+            "n_confident_val_samples": n_confident_val_samples,
             "timestamp": timestamp,
             "finetune_chain_length": finetune_chain_length,
         }))
@@ -301,7 +345,10 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
         "n_train": len(X_train),
         "n_val": len(X_val),
         "val_accuracy": round(val_acc, 4),
+        "val_accuracy_confident": round(val_accuracy_confident, 4) if val_accuracy_confident is not None else None,
+        "n_confident_val_samples": n_confident_val_samples,
         "prev_val_accuracy": prev_val_acc,
+        "prev_val_accuracy_confident": prev_val_acc_confident,
         "finetune_chain_length": finetune_chain_length if should_save else prev_chain_length,
         "epochs": epochs,
         "timestamp": timestamp,
