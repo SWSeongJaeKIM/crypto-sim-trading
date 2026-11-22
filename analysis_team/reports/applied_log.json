@@ -1710,5 +1710,93 @@
     "decision": "skipped",
     "reason": "매매 전략의 핵심 판단(진입 조건)을 바꾸는 제안. 리포트 스스로 '급락 가드를 추가하면 실제 반등 기회(진짜 과매도 반등)도 함께 놓칠 수 있어 민감도 조정이 필요하다'고 명시해 코드 리뷰만으로 효과 검증 불가 — 운영 데이터(백테스트) 필요.",
     "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0918",
+    "proposal": "data_fetcher.py fetch_all_minute_history()가 재학습마다 90일치 1분봉 전체를 통째로 재수집하던 것을, 캐시의 마지막 open_time 이후분만 받아 병합하는 증분 수집으로 전환 (fetch_minute_history에 min_time 파라미터 추가 + 하루 1회 코인별 강제 전체재수집 안전장치)",
+    "role": "execution",
+    "decision": "applied",
+    "reason": "코드 구조/효율 개선이며 매매 판단(진입/청산/임계값/베팅비율) 자체는 전혀 건드리지 않는다. 스키마 변경이나 운영 중단 없이 적용 가능하고, 네트워크 모킹 스크립트로 전체/증분 수집 범위, 콜드스타트/동일날짜 증분/날짜변경 시 강제 전체재수집, 캐시-신규 병합(중복제거/정렬) 결과를 모두 검증했다.",
+    "commit": "f4208e4"
+  },
+  {
+    "timestamp": "2026-11-22_0918",
+    "proposal": "data_fetcher.py _http_get_json()의 재시도가 HTTP 상태코드를 구분하지 않아 영구적인 4xx도 네트워크성 에러와 동일하게 재시도하던 것을, 429/5xx만 재시도하고 그 외 4xx는 즉시 실패로 전환",
+    "role": "execution",
+    "decision": "applied",
+    "reason": "명백한 버그 수정(불필요한 재시도로 인한 사이클 지연 가능성)이며 매매 판단과 무관하다. 리스크는 낮고(마켓 코드가 고정값이라 실제 영향 제한적), 모킹 스크립트로 400/429/503 각각의 재시도 횟수를 검증했다.",
+    "commit": "981319a"
+  },
+  {
+    "timestamp": "2026-11-22_0918",
+    "proposal": "portfolio.py Portfolio에 peak_value_krw/max_drawdown_pct 필드와 update_drawdown() 추가, main_loop.py가 매 사이클 반영, dashboard.py에 최대낙폭 노출",
+    "role": "risk",
+    "decision": "applied",
+    "reason": "매매 판단(진입/청산/임계값/베팅비율) 자체를 바꾸지 않는 관측 지표 추가이며, 기존 저장 문서는 from_doc()에서 기본값 0.0으로 채워져 마이그레이션이 필요 없다. 합성 시나리오로 peak/drawdown 계산과 to_doc/from_doc 라운드트립(신규+구버전 문서 호환)을 모두 검증했다.",
+    "commit": "07b4b17"
+  },
+  {
+    "timestamp": "2026-11-22_0918",
+    "proposal": "LSTM finetune_chain_length가 임계값 이상이면 전체 재학습(finetune=False)으로 강제 전환하는 분기를 retrain_lstm()에 연결",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "이미 이전 회차에서 반영되어 있음 — main_loop.py의 FINETUNE_CHAIN_LENGTH_RESET_THRESHOLD(84행)와 retrain_lstm() 내 chain_length 체크(557~564행 부근)에 이미 구현돼 있어 이번 회차에서는 추가 작업 없음. synthesizer가 이번 회차 리포트만 보고 Top3 #3으로 다시 제안했으나, 코드 확인 결과 중복 제안이었다.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0918",
+    "proposal": "strategies.py 4개 전략(ma_cross_rsi, bollinger_rsi, trend_follow 등)에 거래량(volume) 필터 추가 — 거래량이 평균 대비 낮으면 BUY/SELL을 HOLD로 무시",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "매매 전략의 핵심 판단(진입/청산 조건)을 바꾸는 제안. strategy 리포트 스스로 '저유동성 코인에서는 신호 자체가 거의 안 나올 수 있어 거래 기회가 과도하게 줄 수 있다'는 트레이드오프를 명시해 코드 리뷰만으로 효과 검증 불가 — 실제 운영 데이터(백테스트) 필요.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0918",
+    "proposal": "strategies.py MACDStrategy의 slow 파라미터를 26에서 다른 값(예: 21)으로 변경해 ma_cross_rsi의 long_window=26과 신호 중복 줄이기",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "매매 전략의 핵심 판단(파라미터)을 바꾸는 제안. 리포트 자체가 '백테스트로 신호 중복도를 재측정'해야 한다고 명시 — 운영 데이터 없이는 효과 검증 불가.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0918",
+    "proposal": "strategies.py TrendFollowStrategy의 ma_window를 50→20~30, buffer_pct를 0.5→0.2~0.3으로 축소해 1분봉 스캘핑에 맞춤",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "매매 전략의 핵심 판단(임계값)을 바꾸는 제안. 리포트 자체가 '실제 개선 여부는 운영 데이터 기반 백테스트로 확인해야 한다'고 명시. synthesizer도 거래량 필터와 동시에 넣지 말고 먼저 단독 백테스트가 필요하다고 판단.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0918",
+    "proposal": "lstm_model.py build_features()에 ref_close(기준 코인 수익률) 상관 피처 추가, main_loop.py retrain_lstm()에서 BTC 등 기준 코인 ret을 merge해서 전달",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "리포트 자체가 '이 변경들이 실제 손익/적중률을 개선하는지는 실제 운영 데이터(거래내역, val_acc 추이)를 봐야 판단 가능'이라고 명시 — 판단 기준 5번(리포트가 실제 운영 데이터 필요라고 명시한 제안은 반영하지 않음)에 해당. 또한 LSTM 예측에 쓰이는 피처 구성 변경은 매매 신호에 간접적으로 영향을 준다.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0918",
+    "proposal": "portfolio.py CoinSlot에 코인별 stop_loss_pct 필드를 추가해 변동성이 큰 코인(DOGE 등)과 작은 코인(BTC 등)의 손절선을 분리",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "매매 전략의 핵심 판단(손절 기준)을 바꾸는 제안이며, risk 리포트 스스로 '데이터로 확인 전에 성급히 적용하지 않는 것이 좋다'고 명시. 코인별 손절선이 달라지면 5개 전략이 '동일 조건'에서 경쟁한다는 전제가 깨져 전략 간 성과 비교의 공정성도 흔들릴 수 있음.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0918",
+    "proposal": "코인별 손절(stop_reason) 발생 횟수를 집계해 대시보드에 표로 노출",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "이미 구현되어 있음 — storage.py의 stop_loss_counts_by_coin()(566행)이 dashboard.py(781행 부근)에서 이미 호출/노출되고 있어 추가 작업이 필요 없다.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0918",
+    "proposal": "storage.py portfolios 테이블을 '<strategy>__<variant>' 합성키 대신 portfolios_v2(strategy, variant 컬럼 분리) 스키마로 마이그레이션",
+    "role": "storage",
+    "decision": "skipped",
+    "reason": "스키마 마이그레이션과 기존 데이터 변환이 필요하고 main_loop.py/dashboard.py의 여러 호출부를 함께 바꿔야 해 운영 중단 위험이 있다 — storage 리포트 자체도 '우선순위 낮음'으로 분류했고, 판단 기준(스키마 마이그레이션처럼 운영 중단이 필요한 제안은 제외)에 해당해 사람이 직접 판단해야 함.",
+    "commit": null
   }
 ]
