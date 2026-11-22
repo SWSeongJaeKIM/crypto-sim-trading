@@ -215,6 +215,15 @@ PAGE = """
       </select></label>
       <button onclick="resetTradeFilters()" style="background:#1a1d24; color:#9aa0a6; border:1px solid #2a2d35; border-radius:6px; padding:4px 10px; font-size:12px; cursor:pointer;">필터 초기화</button>
     </div>
+
+    <div id="trades-chart-card" style="background:#14161b; border:1px solid #2a2d35; border-radius:10px; padding:12px 14px 6px; margin-bottom:14px;">
+      <div id="trades-chart-legend" style="display:flex; flex-wrap:wrap; gap:14px; margin-bottom:6px; font-size:12px; color:#9aa0a6;"></div>
+      <div id="trades-chart-wrap" style="position:relative; width:100%; overflow:hidden;">
+        <svg id="trades-chart-svg" style="display:block; width:100%;"></svg>
+        <div id="trades-tooltip" style="position:absolute; display:none; pointer-events:none; background:#1f232b; border:1px solid #363b47; border-radius:6px; padding:8px 10px; font-size:12px; line-height:1.5; color:#e6e6e6; box-shadow:0 4px 12px rgba(0,0,0,0.4); z-index:10; white-space:nowrap;"></div>
+      </div>
+    </div>
+
     <table id="trades"><thead><tr><th>시각</th><th>전략</th><th>구분</th><th>코인</th><th>매수/매도</th><th>수량</th><th>가격(KRW)</th><th>확신도/베팅비율</th></tr></thead><tbody></tbody></table>
 
     <h3>LSTM 실전 예측 적중률 (실제 가격으로 확정된 예측 기준)</h3>
@@ -286,6 +295,8 @@ function renderTrades() {
   document.getElementById('trades-count').innerText =
     `(최근 ${lastTradesData.length}건 중 ${filtered.length}건 표시)`;
 
+  renderTradesChart(filtered);
+
   const tbody = document.querySelector('#trades tbody');
   tbody.innerHTML = '';
   for (const t of filtered) {
@@ -310,6 +321,174 @@ function renderTrades() {
       <td style="color:var(--text-secondary, #9aa0a6);font-size:12px;">${confCell}</td>
     </tr>`;
   }
+}
+
+// ---- 거래 타임라인 차트 ----
+// 표만으로는 거래가 "언제 몰렸는지/어떤 코인에 집중됐는지" 한눈에 안 들어와서
+// 추가한 시간축 산점도. 코인별로 레인을 나누고, 매매 종류(side)를 색+모양으로
+// 구분한다. 산점도류 차트는 모든 점끼리 색이 구분돼야 해서 안전하게 쓸 수 있는
+// 색이 3개뿐이라(디자인 가이드의 scatter 색상 캡), 색은 "롱/숏/강제청산" 3그룹에만
+// 쓰고 그 안의 세부 구분(매수vs매도 등)은 모양(화살표/다이아몬드/X)으로 더한다.
+const CHART_COINS = ["BTC", "ETH", "XRP", "SOL", "DOGE", "ADA"];
+const SIDE_META = {
+  BUY:              { color: '#3987e5', shape: 'tri-up',       label: '매수 (롱 진입)' },
+  SELL:             { color: '#3987e5', shape: 'tri-down',     label: '매도 (롱 청산)' },
+  SHORT_OPEN:       { color: '#199e70', shape: 'diamond',      label: '숏 진입' },
+  SHORT_CLOSE:      { color: '#199e70', shape: 'diamond-open', label: '숏 청산' },
+  LONG_LIQUIDATED:  { color: '#d03b3b', shape: 'x',            label: '강제청산 (롱)' },
+  SHORT_LIQUIDATED: { color: '#d03b3b', shape: 'x',            label: '강제청산 (숏)' },
+};
+const CHART_LEGEND = [
+  { color: '#3987e5', shape: 'tri-up',       text: '매수(롱 진입)' },
+  { color: '#3987e5', shape: 'tri-down',     text: '매도(롱 청산)' },
+  { color: '#199e70', shape: 'diamond',      text: '숏 진입' },
+  { color: '#199e70', shape: 'diamond-open', text: '숏 청산' },
+  { color: '#d03b3b', shape: 'x',            text: '강제청산' },
+];
+
+function tradeShapeMarkup(shape, color, s) {
+  if (shape === 'tri-up') return `<path d="M0,-${s} L${s},${s*0.85} L${-s},${s*0.85} Z" fill="${color}" stroke="#0f1115" stroke-width="1.5"/>`;
+  if (shape === 'tri-down') return `<path d="M0,${s} L${s},${-s*0.85} L${-s},${-s*0.85} Z" fill="${color}" stroke="#0f1115" stroke-width="1.5"/>`;
+  if (shape === 'diamond') return `<path d="M0,${-s} L${s},0 L0,${s} L${-s},0 Z" fill="${color}" stroke="#0f1115" stroke-width="1.5"/>`;
+  if (shape === 'diamond-open') return `<path d="M0,${-s} L${s},0 L0,${s} L${-s},0 Z" fill="none" stroke="${color}" stroke-width="2"/>`;
+  if (shape === 'x') return `<path d="M${-s},${-s} L${s},${s} M${-s},${s} L${s},${-s}" stroke="${color}" stroke-width="2.5" stroke-linecap="round" fill="none"/>`;
+  return '';
+}
+
+function renderTradesLegendOnce() {
+  const el = document.getElementById('trades-chart-legend');
+  if (el.dataset.built) return;  // 고정 범례라 한 번만 그리면 된다
+  el.innerHTML = CHART_LEGEND.map(it => `
+    <span style="display:inline-flex; align-items:center; gap:5px;">
+      <svg width="14" height="14" viewBox="-7 -7 14 14">${tradeShapeMarkup(it.shape, it.color, 5)}</svg>${it.text}
+    </span>`).join('');
+  el.dataset.built = '1';
+}
+
+function renderTradesChart(points) {
+  renderTradesLegendOnce();
+  const wrap = document.getElementById('trades-chart-wrap');
+  const svg = document.getElementById('trades-chart-svg');
+  const tooltip = document.getElementById('trades-tooltip');
+  const width = Math.max(wrap.clientWidth || 0, 320);
+  const margin = { top: 10, right: 16, bottom: 26, left: 54 };
+  const laneH = 40;
+  const plotH = CHART_COINS.length * laneH;
+  const height = margin.top + plotH + margin.bottom;
+  svg.setAttribute('width', width);
+  svg.setAttribute('height', height);
+  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+
+  if (!points.length) {
+    svg.innerHTML = `<text x="${width/2}" y="${height/2}" fill="#9aa0a6" font-size="13" text-anchor="middle">표시할 거래가 없습니다</text>`;
+    tooltip.style.display = 'none';
+    window.__chartPoints = [];
+    return;
+  }
+
+  const times = points.map(p => new Date(p.timestamp).getTime());
+  let tMin = Math.min(...times), tMax = Math.max(...times);
+  if (tMin === tMax) { tMin -= 60000; tMax += 60000; }
+  const x0 = margin.left, x1 = width - margin.right;
+  const xScale = t => x0 + (t - tMin) / (tMax - tMin) * (x1 - x0);
+
+  const parts = [];
+  // 코인별 레인 구분선 + 라벨 (축의 카테고리 = 코인)
+  CHART_COINS.forEach((coin, i) => {
+    const yTop = margin.top + i * laneH;
+    const yMid = yTop + laneH / 2;
+    parts.push(`<line x1="${x0}" y1="${yTop}" x2="${x1}" y2="${yTop}" stroke="#23262e" stroke-width="1"/>`);
+    parts.push(`<text x="${margin.left - 10}" y="${yMid}" fill="#9aa0a6" font-size="11" text-anchor="end" dominant-baseline="middle">${coin}</text>`);
+  });
+  parts.push(`<line x1="${x0}" y1="${margin.top + plotH}" x2="${x1}" y2="${margin.top + plotH}" stroke="#23262e" stroke-width="1"/>`);
+
+  // x축 (시간) 눈금 5개 — 하나의 축만 쓴다(이중 y축 금지 원칙과 같은 이유로, 시간 축도 하나만)
+  const tickCount = 5;
+  const spanMs = tMax - tMin;
+  const useDate = spanMs > 20 * 3600 * 1000;  // 20시간 넘게 걸쳐 있으면 날짜도 같이 표시
+  for (let k = 0; k <= tickCount; k++) {
+    const t = tMin + (spanMs * k) / tickCount;
+    const d = new Date(t);
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    const label = useDate
+      ? `${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')} ${hh}:${mm}`
+      : `${hh}:${mm}`;
+    const xt = xScale(t);
+    parts.push(`<line x1="${xt}" y1="${margin.top}" x2="${xt}" y2="${margin.top + plotH}" stroke="#1c1f26" stroke-width="1"/>`);
+    parts.push(`<text x="${xt}" y="${height - 8}" fill="#898781" font-size="10" text-anchor="middle">${label}</text>`);
+  }
+
+  // 거래 포인트 — 각 점에 24px짜리 투명 히트영역(hit target)을 같이 둬서
+  // 작은 모양(마커) 위에 정확히 올리지 않아도 호버/툴팁이 걸리게 한다.
+  points.forEach((p, i) => {
+    const meta = SIDE_META[p.side] || { color: '#9aa0a6', shape: 'diamond' };
+    const coinIdx = CHART_COINS.indexOf(p.coin);
+    const laneIdx = coinIdx >= 0 ? coinIdx : CHART_COINS.length - 1;
+    const cx = xScale(new Date(p.timestamp).getTime());
+    const cy = margin.top + laneIdx * laneH + laneH / 2;
+    parts.push(`<g class="trade-point" data-i="${i}" transform="translate(${cx},${cy})" style="cursor:pointer;">`
+      + `<circle r="12" fill="transparent"/>`
+      + tradeShapeMarkup(meta.shape, meta.color, 6)
+      + `</g>`);
+  });
+
+  svg.innerHTML = parts.join('');
+  window.__chartPoints = points;
+
+  // 포인트마다 리스너를 달지 않고 svg 하나에 위임 — 200개 점이어도 리스너는 1개.
+  if (!svg.dataset.wired) {
+    svg.addEventListener('pointermove', onTradesChartHover);
+    svg.addEventListener('pointerleave', () => { tooltip.style.display = 'none'; });
+    svg.dataset.wired = '1';
+  }
+}
+
+function onTradesChartHover(ev) {
+  const tooltip = document.getElementById('trades-tooltip');
+  const g = ev.target.closest('.trade-point');
+  if (!g) { tooltip.style.display = 'none'; return; }
+  const p = (window.__chartPoints || [])[parseInt(g.dataset.i, 10)];
+  if (!p) { tooltip.style.display = 'none'; return; }
+  const meta = SIDE_META[p.side] || { label: p.side };
+  const modeLabel = p.mode === 'reset' ? '리셋' : '누적';
+
+  // 거래 데이터(전략명/이유 등)는 신뢰할 수 없는 문자열일 수 있으니 textContent로만 넣는다.
+  tooltip.innerHTML = '';
+  const title = document.createElement('div');
+  title.style.fontWeight = '600';
+  title.style.marginBottom = '3px';
+  title.textContent = meta.label || p.side;
+  tooltip.appendChild(title);
+  [
+    p.timestamp.slice(0, 19).replace('T', ' '),
+    `${p.coin} · ${p.strategy} (${modeLabel})`,
+    `수량 ${p.qty.toFixed(4)} · 가격 ${Math.round(p.price_krw).toLocaleString()}원`,
+  ].forEach(line => {
+    const row = document.createElement('div');
+    row.textContent = line;
+    tooltip.appendChild(row);
+  });
+  if (p.reason) {
+    const reasonRow = document.createElement('div');
+    reasonRow.style.color = '#9aa0a6';
+    reasonRow.style.marginTop = '3px';
+    reasonRow.textContent = p.reason;
+    tooltip.appendChild(reasonRow);
+  }
+
+  const wrap = document.getElementById('trades-chart-wrap');
+  const wrapRect = wrap.getBoundingClientRect();
+  tooltip.style.left = '0px';
+  tooltip.style.top = '0px';
+  tooltip.style.display = 'block';
+  const tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
+  let left = ev.clientX - wrapRect.left + 14;
+  let top = ev.clientY - wrapRect.top - th - 10;
+  if (left + tw > wrap.clientWidth) left = ev.clientX - wrapRect.left - tw - 14;
+  if (top < 0) top = ev.clientY - wrapRect.top + 14;
+  tooltip.style.left = left + 'px';
+  tooltip.style.top = top + 'px';
 }
 
 const ROLE_ORDER = ['strategy', 'lstm', 'execution', 'storage', 'risk', 'synthesizer'];
