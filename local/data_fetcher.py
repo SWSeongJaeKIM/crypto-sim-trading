@@ -129,7 +129,15 @@ def _http_get_json(url: str, timeout: int = 10, retries: int = 3) -> dict | list
             # except Exception까지 그대로 전파되고 있었다 (analysis_team
             # execution 리포트 2026-11-22_0517 발견점 #1, synthesizer Top3 #1).
             last_err = e
-            time.sleep(1.0 * (attempt + 1))
+            # 마지막 시도(attempt == retries - 1)가 실패하면 그 뒤로는 어차피
+            # 재시도하지 않고 바로 루프를 빠져나가 FetchError를 던지므로, 그
+            # 직전에 sleep할 이유가 없다. 예전에는 마지막 시도 실패 후에도
+            # sleep해서, 특히 매 60초 사이클마다 호출되는
+            # fetch_latest_minute_candles(timeout=5, retries=2)에서 완전
+            # 실패까지 걸리는 시간에 불필요한 지연이 매번 더해졌다
+            # (analysis_team execution 리포트 2026-11-22_0718 발견점 #2).
+            if attempt < retries - 1:
+                time.sleep(1.0 * (attempt + 1))
     raise FetchError(f"GET failed after {retries} retries: {url} ({last_err})")
 
 
