@@ -1870,5 +1870,69 @@
     "decision": "skipped",
     "reason": "CoinSlot/snapshots 스키마 변경이 필요한 제안이며 기존에 저장된 포트폴리오/스냅샷 데이터에는 해당 필드가 없어 하위호환 처리가 필요함(판단 기준 3번 제외 대상, 과거 peak_value_krw 코인별 확장 제안들과 동일한 이유로 반복 보류). 리포트도 실제로 어떤 코인이 낙폭을 주도하는지는 실제 운영 데이터를 봐야 확인 가능하다고 명시함.",
     "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_1124",
+    "proposal": "resolve_predictions()가 current_prices_krw에 없는 코인의 예측 행을 그냥 continue하여, 코인이 유니버스에서 빠지거나 가격 피드가 영구 중단되면 그 코인의 predictions 행이 resolved=0 상태로 영원히 누적될 수 있음 — prune_stale_unresolved_predictions(keep_days=7)를 storage.py에 추가하고 main_loop.py의 기존 일일 prune 루틴에 연결",
+    "role": "storage (synthesizer Top3 #2)",
+    "decision": "applied",
+    "reason": "순수 추가 함수 + 기존 prune 호출 지점에 한 줄 연결로 구현 범위가 작고, trades/portfolios 등 매매 판단 로직은 전혀 건드리지 않음. resolved=1 행이나 최근(7일 이내) 미확정 행은 보존됨을 임시 DB로 시뮬레이션해 확인. keep_days=7은 정상 확정 소요시간(1사이클=1분) 대비 충분히 넉넉한 값.",
+    "commit": "0c09bae"
+  },
+  {
+    "timestamp": "2026-11-22_1124",
+    "proposal": "LSTM 재학습 중 run_one_cycle()의 손절/강제청산 체크가 완전히 멈추는 문제 — retrain_lstm()의 코인별 학습 루프 중간에 현재가를 짧게 재조회해 손절 체크만 수행하는 경량 안전핀 추가 (또는 재학습을 별도 스레드/프로세스로 분리)",
+    "role": "execution (synthesizer Top3 #1)",
+    "decision": "skipped",
+    "reason": "execution 리포트 자체가 이 변경의 트레이드오프로 '재학습 중에는 포트폴리오 상태가 안 변한다'는 기존 전제를 깨뜨려 손절 체크와 재학습이 동시에 포트폴리오를 읽고/쓰는 새로운 동시성 버그 위험이 생길 수 있다고 명시함. main_loop.py는 사용자 PC에서 상시 실행 중인 파일이라 이런 동시성 변경은 코드 리뷰만으로 안전성을 확정하기 어려워(판단 기준: 위험이 낮을 것) 자동 반영 대상에서 제외한다. 아키텍처(경량 안전핀 vs 스레드/프로세스 분리) 선택 자체도 사람이 직접 판단해야 할 사안으로 다음 회차/사람 리뷰로 넘김.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_1124",
+    "proposal": "get_finetune_chain_length()(lstm_model.py) 결과를 main_loop.py의 retrain_lstm() 호출부에서 실제로 소비해 chain_len이 임계값 이상이면 finetune=False로 전체 재학습 전환",
+    "role": "lstm (synthesizer Top3 #3)",
+    "decision": "skipped",
+    "reason": "이미 구현되어 있음 — main_loop.py의 retrain_lstm()(FINETUNE_CHAIN_LENGTH_RESET_THRESHOLD=30, 커밋 5651115, 2026-11-22 00:39 UTC)에서 chain_length >= 임계값이면 finetune=not force_full_retrain으로 이미 전체 재학습 전환 중. 이번 회차 lstm 분석가 리포트가 main_loop.py의 현재 상태를 반영하지 못하고 나온 제안으로 판단, 코드 변경 없이 스킵.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_1124",
+    "proposal": "MACDStrategy(fast=12/slow=26/signal=9)와 TrendFollowStrategy(ma_window=50)의 파라미터가 일봉 기준 교과서 기본값을 그대로 쓰고 있어 1분봉 스캘핑에 과도하게 둔감함 — 더 짧은 윈도우로 축소",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "매매 전략의 핵심 임계값(파라미터)을 바꾸는 제안이며, 리포트 자체가 '백테스트로 순이익 기준 재검증 필요'라고 명시함 — 효과가 코드 리뷰만으로는 검증 불가능해(판단 기준 2번) 반영하지 않음.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_1124",
+    "proposal": "4개 조건식(ma_cross_rsi, bollinger_rsi, macd_momentum, trend_follow) 전부 거래량(volume)을 신호 계산에 전혀 참조하지 않음 — 저유동성 구간 필터링을 위해 BUY/SELL 조건에 거래량 필터 추가",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "진입/청산 조건을 바꾸는 핵심 트레이딩 로직 변경이며, 리포트 스스로 '임계값 자체가 새로운 과최적화 변수가 되고 유효한 진입 기회도 함께 걸러낼 수 있다'고 밝혀 효과가 코드 리뷰만으로 검증되지 않음(판단 기준 2번) — 반영하지 않음.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_1124",
+    "proposal": "BollingerRSIStrategy가 급락 지속 중에도 하단밴드+RSI 과매도 조건으로 평균회귀 매수를 시도해 '떨어지는 칼날 잡기' 위험 — 최근 N봉 누적 하락률이 임계치 이상이면 BUY 보류 조건 추가",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "청산/진입 조건을 바꾸는 핵심 트레이딩 로직 변경이며, 리포트가 '보수적으로 설정할수록 발동 빈도가 거의 0에 가까워질 수 있고 반등 구간 수익 기회를 놓칠 위험이 있다'고 명시 — 효과가 코드 리뷰만으로 검증 불가능해(판단 기준 2번) 반영하지 않음.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_1124",
+    "proposal": "STOP_LOSS_PCT(portfolio.py:54)가 전 코인 동일(8%)해 DOGE/SOL 같은 고변동성 코인에서 손절·재진입이 반복될 가능성 — 코인별 변동성 기반 STOP_LOSS_PCT_BY_COIN dict로 차등화",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "손절 기준(핵심 트레이딩 판단)을 바꾸는 제안이며, 리포트 자체가 '실제로 코인별 손절 빈도가 얼마나 차이나는지는 운영 데이터를 봐야 판단 가능 — 코드만으로는 확정할 수 없다'고 명시함(판단 기준 5번: 운영 데이터 필요 명시 제안 제외 대상) — 반영하지 않음.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_1124",
+    "proposal": "CoinSlot에 stop_loss_count: int = 0 필드를 추가해 코인별 손절 발생 빈도를 to_doc()에 노출 (대시보드 observability 목적)",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "트레이딩 로직 변경 없는 순수 관찰용 필드라 위험도 자체는 낮지만, synthesizer 리포트가 'Top3에는 넣지 않음, 다음 회차 후보로 유지 권장'이라고 명시적으로 이번 회차 우선순위에서 제외함 — 이번 회차는 synthesizer Top3 범위에 집중하고 다음 회차 검토 대상으로 넘김.",
+    "commit": null
   }
 ]
