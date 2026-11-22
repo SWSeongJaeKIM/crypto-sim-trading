@@ -48,6 +48,35 @@ class FetchError(Exception):
     pass
 
 
+# main_loop.py 110~130행 근처에 이미 있는 "반복되는 예외는 N초마다 1회만 전체
+# 트레이스" 패턴을 data_fetcher.py에도 적용한다. fetch_all_latest_candles/
+# fetch_all_minute_history의 _fetch_one은 main_loop.py에서 매 사이클(60초)
+# 마다 호출되는데, 특정 코인 마켓이 한동안 계속 실패하면(Upbit 점검, 네트워크
+# 문제 등) 지금까지는 실패마다 매번 전체 스택트레이스를 남겨 run.log가
+# 금방 폭주할 수 있었다 (analysis_team execution 리포트 2026-11-22_0118,
+# 2026-11-22_0221). main_loop.py 쪽은 (전략, 코인, 예외타입)이 키지만 이
+# 모듈은 전략이 없으므로 (코인, 예외타입)만으로 구분한다.
+_warned_repeated_exception: dict[tuple[str, str], float] = {}
+_REPEATED_EXCEPTION_LOG_INTERVAL_SEC = 3600  # 1시간마다 전체 트레이스 1회
+
+
+def _log_fetch_exception(log_prefix: str, coin: str, e: Exception) -> None:
+    """실패마다 log.exception(전체 스택트레이스)을 남기는 대신, 같은
+    (코인, 예외타입) 조합은 1시간에 1회만 전체 트레이스를 남기고 그 사이엔
+    log.warning만 남긴다. 실제로 장애가 지속되는 걸 운영자가 너무 늦게
+    알아차리지 않도록 "완전 무음화"가 아니라 "일정 시간마다 1회"로
+    완화한다(main_loop.py의 동일 패턴과 같은 트레이드오프)."""
+    key = (coin, type(e).__name__)
+    now_mono = time.monotonic()
+    last_logged = _warned_repeated_exception.get(key)
+    if last_logged is None or (now_mono - last_logged) >= _REPEATED_EXCEPTION_LOG_INTERVAL_SEC:
+        log.exception(f"{log_prefix}: {e}")
+        _warned_repeated_exception[key] = now_mono
+    else:
+        log.warning(f"{log_prefix} (반복 중, 같은 종류 {_REPEATED_EXCEPTION_LOG_INTERVAL_SEC}초 내 "
+                    f"전체 트레이스는 이미 남겼음): {type(e).__name__}: {e}")
+
+
 class _RateLimiter:
     """여러 스레드가 동시에 호출해도 전체 요청 간 최소 간격(min_interval_sec)을
     전역으로 강제하는 간단한 레이트 리미터.
@@ -236,9 +265,11 @@ def fetch_all_latest_candles(count: int = 200) -> dict[str, pd.DataFrame]:
             # FetchError(네트워크/HTTP 재시도 소진)뿐 아니라, Upbit 응답 형식이
             # 예상과 달라 _parse_minute_df 등에서 터지는 KeyError류까지 전부 잡아서
             # 코인 1개의 오류가 ThreadPoolExecutor를 통해 전파되어 6코인 전체
-            # 수집(fetch_all_latest_candles)을 실패시키지 않도록 한다. 스택트레이스는
-            # logging.exception으로 남겨 원인 진단이 가능하게 한다.
-            log.exception(f"[WARN] {coin} 최신 캔들 수집 실패: {e}")
+            # 수집(fetch_all_latest_candles)을 실패시키지 않도록 한다. 반복되는
+            # 실패는 _log_fetch_exception()이 1시간에 1회만 전체 스택트레이스를
+            # 남기고 그 사이엔 warning만 남긴다(원인 진단은 유지하면서 로그
+            # 폭주를 막음).
+            _log_fetch_exception(f"[WARN] {coin} 최신 캔들 수집 실패", coin, e)
             return coin, None
 
     with ThreadPoolExecutor(max_workers=len(COINS)) as executor:
@@ -302,9 +333,10 @@ def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=Non
             return coin, df
         except Exception as e:
             # 위 _fetch_one과 같은 이유로 FetchError만이 아니라 모든 예외를 잡는다.
-            # 캐시 폴백 분기는 기존과 동일하게 그대로 탄다.
+            # 캐시 폴백 분기는 기존과 동일하게 그대로 탄다. 반복되는 실패는
+            # _log_fetch_exception()이 1시간에 1회만 전체 스택트레이스를 남긴다.
             with print_lock:
-                log.exception(f"[WARN] {coin} 히스토리 수집 실패: {e}, 캐시 확인")
+                _log_fetch_exception(f"[WARN] {coin} 히스토리 수집 실패 (캐시 확인)", coin, e)
             if cache_path.exists():
                 return coin, pd.read_csv(cache_path, parse_dates=["open_time"])
             return coin, None
