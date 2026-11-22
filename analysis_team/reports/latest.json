@@ -1,47 +1,47 @@
 {
-  "generated_at": "2026-11-22_1124",
+  "generated_at": "2026-11-22_1219",
   "roles": {
     "execution": {
       "role": "execution",
       "role_label": "실행/버그 분석가",
-      "timestamp": "2026-11-22_1124",
-      "path": "analysis_team/reports/2026-11-22_1124_execution.md",
-      "summary": "예외처리·로깅·API 레이트리밋 설계는 이미 여러 차례 분석을 거쳐 매우 견고한 상태이며, 남아있는 핵심 리스크는 \"LSTM 재학습 중 매매 사이클(특히 손절/강제청산 체크)이 완전히 멈춘다\"는 구조적 문제 하나로 집중된다."
+      "timestamp": "2026-11-22_1219",
+      "path": "analysis_team/reports/2026-11-22_1219_execution.md",
+      "summary": "예외처리·로깅·사이클 타이밍 전반은 이미 여러 차례의 리뷰를 거쳐 상당히 견고하게 다져져 있고, 남은 문제는 두 곳의 좁은 엣지케이스 정도다."
     },
     "lstm": {
       "role": "lstm",
       "role_label": "LSTM 분석가",
-      "timestamp": "2026-11-22_1124",
-      "path": "analysis_team/reports/2026-11-22_1124_lstm.md",
-      "summary": "피처·구조·재학습 설계 전반은 1분봉 방향성 예측이라는 어려운 과제에 맞게 이미 신중하게 설계되어 있으나(시퀀스/라벨 정의 정합성, train/val 누수 방지, 롤백 안전장치), 피처에 코인 외부 정보(호가·타코인 상관관계·시간대)가 빠져 있고 무한 파인튠 체인에 대한 자동 리셋 정책"
+      "timestamp": "2026-11-22_1219",
+      "path": "analysis_team/reports/2026-11-22_1219_lstm.md",
+      "summary": "피처·구조·파인튠 안전장치는 이미 상당히 다듬어져 있고(이전 분석 이력이 코드 주석에 남아있음), 남은 공백은 \"연속 파인튠 체인 길이를 추적만 하고 실제 전체 재학습을 자동 트리거하지 않는 것\"과 \"코인별 독립 피처라 코인 간 상관관계가 빠진 것\" 두 가지다."
     },
     "risk": {
       "role": "risk",
       "role_label": "리스크 분석가",
-      "timestamp": "2026-11-22_1124",
-      "path": "analysis_team/reports/2026-11-22_1124_risk.md",
-      "summary": "코인 간 자금배분은 균등하지만 손절 임계값(8%)이 코인별 변동성과 무관하게 전 코인 동일해 고변동성 코인 쪽에 리스크가 더 자주 \"실현\"될 구조적 가능성이 있고, 물타기(averaging-down) 위험은 이미 코드에서 수정되어 있다."
+      "timestamp": "2026-11-22_1219",
+      "path": "analysis_team/reports/2026-11-22_1219_risk.md",
+      "summary": "물타기형 손절 회피 문제는 이미 `first_entry_price` 앵커링으로 해결되어 있으나, 확신도가 높을 때의 베팅 비율 상한(90%)과 코인 간 리스크 불균형, 리셋 시 포지션 증발 기록 누락은 아직 보완할 여지가 있다."
     },
     "storage": {
       "role": "storage",
       "role_label": "데이터/저장소 분석가",
-      "timestamp": "2026-11-22_1124",
-      "path": "analysis_team/reports/2026-11-22_1124_storage.md",
-      "summary": "인덱스·보관주기·동시성(WAL+재시도)·portfolios 합성키 검증 등 기존에 지적됐던 문제들은 이미 대부분 코드에 반영되어 있고 구조적으로 안정적이다. 다만 `predictions` 테이블에서 \"영구 미확정(resolved=0)\" 행이 보관주기 없이 무한 누적될 수 있는 경로가 하"
+      "timestamp": "2026-11-22_1219",
+      "path": "analysis_team/reports/2026-11-22_1219_storage.md",
+      "summary": "스키마/인덱스/동시성(WAL+재시도)/보관주기 설계는 이미 여러 차례 리포트를 거쳐 상당히 성숙한 상태이며, 이번 점검에서 새로 발견한 것은 \"보관주기 함수들이 실제로 어딘가에서 주기적으로 호출되는지 이 파일만으로는 확인 불가\"라는 점과 portfolios 합성키 스키마의 근본적 구조 "
     },
     "strategy": {
       "role": "strategy",
       "role_label": "전략 분석가",
-      "timestamp": "2026-11-22_1124",
-      "path": "analysis_team/reports/2026-11-22_1124_strategy.md",
-      "summary": "4개 조건식 모두 로직 자체는 교과서적으로 타당하지만, 파라미터가 일봉/스윙 트레이딩 표준값을 그대로 가져온 흔적이 강하고, 4개 중 3개(ma_cross_rsi, macd_momentum, trend_follow)가 본질적으로 같은 \"이동평균 추세전환\" 신호를 변주한 것이라 상관관계가"
+      "timestamp": "2026-11-22_1219",
+      "path": "analysis_team/reports/2026-11-22_1219_strategy.md",
+      "summary": "4개 조건식 중 3개(ma_cross_rsi, bollinger_rsi, macd_momentum)의 기본 파라미터가 일봉/스윙 트레이딩용 \"교과서 기본값\"을 그대로 쓰고 있고, 전 전략이 거래량을 전혀 참조하지 않아 1분봉 스캘핑 환경에 맞는지 재검증이 필요합니다."
     },
     "synthesizer": {
       "role": "synthesizer",
       "role_label": "종합 조정자",
-      "timestamp": "2026-11-22_1124",
-      "path": "analysis_team/reports/2026-11-22_1124_synthesizer.md",
-      "summary": "**1. 재학습 중 손절/강제청산 체크 중단 문제 — 경량 안전핀 추가 (execution)**"
+      "timestamp": "2026-11-22_1219",
+      "path": "analysis_team/reports/2026-11-22_1219_synthesizer.md",
+      "summary": "**1. 실행계층 방어코드 2건 (execution)** — 난이도 최저, 효과 확실"
     }
   }
 }
