@@ -332,6 +332,7 @@ def fetch_minute_history(market: str, days: int = 14, sleep_sec: float = 0.12,
                 # log.warning으로 교체해 run.log에도 남긴다.
                 log.warning(f"{market} 페이지네이션이 {new_to_param} 시점에서 "
                             f"전진하지 않아 중단 (수집된 {len(all_rows)}개로 계속)")
+                is_partial = True
                 break
         else:
             stuck_count = 0
