@@ -477,7 +477,16 @@ def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=Non
     def _fetch_one(coin: str, i: int) -> tuple[str, pd.DataFrame | None, bool]:
         if on_progress:
             with print_lock:
-                on_progress(coin, i, len(COINS))
+                # 이 콜백(결국 main_loop.set_progress → storage.connect)이
+                # 여기서 예외를 던지면 try 블록 밖이라 ThreadPoolExecutor의
+                # future.result()로 그대로 전파돼, 같이 수집 중인 다른 5개
+                # 코인 결과까지 통째로 날아간다 — 아래 _on_page의 on_progress
+                # 호출은 499행 try가 감싸주지만 여기는 그 전이라 보호되지
+                # 않았다 (analysis_team execution 리포트 2026-11-22_1723).
+                try:
+                    on_progress(coin, i, len(COINS))
+                except Exception as e:
+                    log.warning(f"[{coin}] on_progress 콜백 실패(무시하고 계속 진행): {e}")
 
         def _on_page(page_idx, oldest_time, rows_so_far, _coin=coin, _i=i):
             # 10페이지마다(약 1~2초 간격) 한 번씩만 찍어서 로그 폭주를 막되,
