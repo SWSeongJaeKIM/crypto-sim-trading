@@ -523,8 +523,15 @@ def retrain_lstm() -> bool:
         set_progress("training", f"{coin} 데이터 수집 중... ({i}/{total})",
                      current_coin=coin, coin_index=i, coin_total=total, train_step="fetching")
 
+    # fetch 단계와 train 단계 소요시간을 각각 남긴다. 기존에는 호출부(main()의
+    # retrain_lstm() 주변)에서 전체 묶음 소요시간만 로그로 남겨, "사이클이 느려진
+    # 게 90일치 재수집 쪽인지 학습 자체인지" 구분할 수 없었다 (analysis_team
+    # execution 리포트 2026-11-22_0417 구체적 제안 #3).
+    _fetch_started = time.monotonic()
     history = data_fetcher.fetch_all_minute_history(days=HISTORY_DAYS_FOR_TRAIN, on_progress=_on_fetch_progress)
+    log.info(f"LSTM 재학습: 데이터 수집 {len(history)}개 코인, {time.monotonic() - _fetch_started:.1f}초")
 
+    _train_started = time.monotonic()
     for i, (coin, df) in enumerate(history.items(), start=1):
         set_progress("training", f"{coin} 모델 학습 중... ({i}/{len(history)})",
                      current_coin=coin, coin_index=i, coin_total=len(history), train_step="fitting")
@@ -592,6 +599,7 @@ def retrain_lstm() -> bool:
             })
     else:
         log.warning("이번 재학습 슬롯에서 코인이 전부 학습 실패 — last_lstm_train 메타를 갱신하지 않고 다음 사이클에 재시도합니다.")
+    log.info(f"LSTM 재학습: 학습(fitting) 단계 {time.monotonic() - _train_started:.1f}초")
     set_progress("idle", "학습 완료, 대기 중")
     return any_trained
 
