@@ -135,6 +135,16 @@ _warned_missing_model: set[str] = set()
 _warned_repeated_exception: dict[tuple[str, str, str], float] = {}
 _REPEATED_EXCEPTION_LOG_INTERVAL_SEC = 3600  # 1시간(60사이클)마다 전체 트레이스 1회
 
+# run_one_cycle()에서 특정 코인만 이번 사이클 캔들 수집에 실패하면(예: Upbit
+# API 일시 오류로 그 코인만 None), prices_krw/candles에서 조용히 빠지고
+# 그 코인은 신호 계산뿐 아니라 손절/강제청산 체크(435행 근처)까지 이번
+# 사이클엔 전혀 돌지 않는다. 지금까지는 이 상황이 로그에 전혀 남지 않아
+# 사후 진단이 불가능했다 (analysis_team execution 리포트 2026-11-22_0417
+# 발견점 #2, synthesizer Top3 #2). data_fetcher._log_fetch_exception과
+# 동일한 방식(코인별 1시간 쓰로틀)으로 로그 폭주 없이 추적 가능하게 한다.
+_warned_missing_coin_data: dict[str, float] = {}
+_MISSING_COIN_DATA_LOG_INTERVAL_SEC = 3600
+
 
 def _handle_sigint(signum, frame):
     global _stop
@@ -333,6 +343,24 @@ def run_one_cycle(conn) -> None:
     set_progress("cycle_running", "5개 전략 신호 계산/매매 중...")
 
     prices_krw = {coin: float(df["close"].iloc[-1]) for coin, df in candles.items() if len(df)}
+
+    # 코인 중 일부만 이번 사이클 가격 데이터가 없으면(수집 실패 등), 그
+    # 코인의 신호 계산과 손절체크가 모두 조용히 스킵된다 — 다음 사이클(최대
+    # 1분 후)에 복구되지만, 1시간에 1회만 경고를 남겨 사후 진단이 가능하게
+    # 한다 (analysis_team execution 리포트 2026-11-22_0417 발견점 #2,
+    # synthesizer Top3 #2).
+    missing_coins = sorted(set(COINS) - set(prices_krw.keys()))
+    if missing_coins:
+        now_mono = time.monotonic()
+        for coin in missing_coins:
+            last_logged = _warned_missing_coin_data.get(coin)
+            if last_logged is None or (now_mono - last_logged) >= _MISSING_COIN_DATA_LOG_INTERVAL_SEC:
+                log.warning(f"[{coin}] 이번 사이클 가격 데이터 없음 — 신호 계산 및 손절/강제청산 "
+                             f"체크 모두 스킵됨 (다음 사이클에 복구 시도, 같은 코인은 "
+                             f"{_MISSING_COIN_DATA_LOG_INTERVAL_SEC}초 내 반복 경고 생략)")
+                _warned_missing_coin_data[coin] = now_mono
+    else:
+        _warned_missing_coin_data.clear()  # 전 코인 복구됐으니 다음 결손 시 즉시 다시 경고
 
     # 지난 사이클에 LSTM이 냈던 예측들을 이번 사이클의 실제가로 확정 (적중여부 계산)
     # try/except로 감싼다 (analysis_team execution 리포트 2026-11-21_2320 제안):
