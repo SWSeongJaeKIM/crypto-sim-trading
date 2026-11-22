@@ -251,6 +251,38 @@ function showTab(name) {
 
 let lastTradesData = null;  // 마지막으로 받은 d.trades — 필터 select를 바꿀 때 재요청 없이 다시 그리는 데 사용
 let lastFullData = null;    // 마지막으로 받은 전체 응답(d) — 카드를 펼치고 접을 때 재요청 없이 다시 그리는 데 사용
+let lastProgress = null;    // 마지막으로 받은 progress — "N초 전"을 15초 서버 폴링과 별개로 매초 갱신하는 데 사용
+
+// "마지막 업데이트 Ν초 전" 표시를 서버에서 새 데이터를 받아올 때만(15초마다)
+// 갱신하면 화면에서 숫자가 15초 단위로 뚝뚝 끊겨 보인다 — updated_at 자체는
+// 그대로 두고, 지금 몇 초가 지났는지 계산하는 쪽을 1초 간격으로 따로 돌린다.
+function tickProgressDisplay() {
+  const p = lastProgress;
+  if (!p) return;
+  const dot = document.getElementById('progress-dot');
+  const stageLabel = {idle:'대기 중', collecting:'데이터 수집 중', cycle_running:'매매 사이클 실행 중',
+                      training:'LSTM 학습 중', sleeping:'대기 중', error:'에러'}[p.stage] || p.stage || '알수없음';
+  // progress.updated_at은 main_loop.py가 set_progress()를 호출할 때마다
+  // 찍히는 시각 — watchdog.bat가 보는 heartbeat.txt와 같은 순간에 갱신되는
+  // 값이라, 여기서 "몇 분 전"을 보여주면 워치독이 멈춤으로 판단하기 전에
+  // 사람도 눈으로 먼저 알아챌 수 있다.
+  let ageLabel = '';
+  let staleWarning = false;
+  if (p.updated_at) {
+    const ageSec = (Date.now() - new Date(p.updated_at).getTime()) / 1000;
+    if (ageSec < 90) {
+      ageLabel = `${Math.round(ageSec)}초 전`;
+    } else {
+      const ageMin = Math.round(ageSec / 60);
+      ageLabel = `${ageMin}분 전`;
+      if (ageMin >= 5) staleWarning = true;  // watchdog.bat의 STALE_MINUTES(기본 5분)와 동일 기준
+    }
+  }
+  dot.className = 'dot dot-' + (staleWarning ? 'error' : (p.stage || 'idle'));
+  document.getElementById('progress-text').innerText =
+    `[${stageLabel}] ${p.detail || ''}` + (ageLabel ? ` (${ageLabel})` : '') +
+    (staleWarning ? ' ⚠ 응답 없음 — 멈췄을 수 있음 (watchdog 사용 시 자동 재시작됨)' : '');
+}
 const expandedCards = new Set();  // 펼쳐진 카드 키("<mode>__<strategy>") 집합. 15초마다 새로고침해도 펼친 상태가 유지되게 한다.
 
 function toggleCardDetail(cardKey) {
@@ -261,27 +293,28 @@ function toggleCardDetail(cardKey) {
   renderCards('cards-cumulative', 'cumulative');
 }
 
-// 전략 카드를 펼쳤을 때 보여줄 "코인별 보유 현황" — 수량 대신 진입가/현재가/
-// 레버리지/평가손익처럼 "지금 얼마에 몇 배로 들어가 있는지"를 바로 읽을 수 있게.
+// 전략 카드를 펼쳤을 때 보여줄 "코인별 보유 현황". 처음엔 6개 컬럼짜리
+// <table>이었는데, 카드 하나 너비(grid auto-fit라 보통 220~300px)에 6개
+// 컬럼을 욱여넣다 보니 "레버리지" 같은 한글이 세로로 한 글자씩 줄바꿈되는
+// 등 전혀 못 읽을 수준이 됐었다(실제 스크린샷으로 확인). 두 가지로 고쳤다:
+// 1) renderCards에서 펼쳐진 카드는 grid-column을 전체 폭으로 넓힌다.
+// 2) 표 대신, 코인 하나당 한 줄(flex row)로 자연스럽게 흐르는 리스트로 바꿔서
+//    좁은 화면에서도 글자가 줄 단위로만 줄바꿈되지 하나씩 쪼개지지 않게 한다.
+// 또한 "대기 중"(포지션 없음) 코인을 한 줄씩 다 나열하지 않고 한 줄로 묶어서,
+// 정작 필요한 "지금 들어가 있는 포지션"만 바로 눈에 띄게 했다.
 function renderPositionDetail(slots) {
   if (!slots.length) return '';
-  const rows = slots.map(s => {
-    let statusLabel, entryPrice, leverageLabel;
-    if (s.position === 'long') {
-      statusLabel = '롱 보유';
-      entryPrice = s.avg_cost_krw;
-      leverageLabel = '1배(현물)';
-    } else if (s.position === 'short') {
-      statusLabel = '숏 보유';
-      entryPrice = s.short_avg_entry_krw;
-      leverageLabel = `${s.leverage.toFixed(0)}배`;
-    } else {
-      statusLabel = '대기 중';
-      entryPrice = null;
-      leverageLabel = '-';
-    }
+  const active = slots.filter(s => s.position !== 'none');
+  const idle = slots.filter(s => s.position === 'none');
+
+  const rows = active.map(s => {
+    const isShort = s.position === 'short';
+    const entryPrice = isShort ? s.short_avg_entry_krw : s.avg_cost_krw;
+    const badgeLabel = isShort ? `숏 ${s.leverage.toFixed(0)}배` : '롱';
+    const badgeColor = isShort ? '#eda100' : '#3987e5';
     const priceLabel = s.current_price_krw ? `${Math.round(s.current_price_krw).toLocaleString()}원` : '-';
     const entryLabel = entryPrice ? `${Math.round(entryPrice).toLocaleString()}원` : '-';
+
     let pnlLabel = '-';
     let pnlCls = '';
     if (s.unrealized_pnl_pct !== null && s.unrealized_pnl_pct !== undefined) {
@@ -289,20 +322,27 @@ function renderPositionDetail(slots) {
       const sign = s.unrealized_pnl_pct >= 0 ? '+' : '';
       pnlLabel = `${sign}${s.unrealized_pnl_pct.toFixed(1)}% (${sign}${Math.round(s.unrealized_pnl_krw).toLocaleString()}원)`;
     }
-    return `<tr>
-      <td>${s.coin}</td>
-      <td>${statusLabel}</td>
-      <td>${entryLabel}</td>
-      <td>${priceLabel}</td>
-      <td>${leverageLabel}</td>
-      <td class="${pnlCls}" style="font-size:12px; font-weight:600;">${pnlLabel}</td>
-    </tr>`;
+
+    return `
+      <div style="display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:7px 0; border-bottom:1px solid #22252c; font-size:13px;">
+        <span style="font-weight:700; width:42px; flex-shrink:0;">${s.coin}</span>
+        <span style="background:${badgeColor}22; color:${badgeColor}; border-radius:5px; padding:2px 7px; font-size:11px; font-weight:600; flex-shrink:0;">${badgeLabel}</span>
+        <span style="color:#9aa0a6; white-space:nowrap;">${entryLabel} → ${priceLabel}</span>
+        <span class="${pnlCls}" style="margin-left:auto; font-weight:700; white-space:nowrap;">${pnlLabel}</span>
+      </div>`;
   }).join('');
+
+  const idleLine = idle.length
+    ? `<div style="color:#5b6472; font-size:12px; margin-top:6px;">대기 중(현금 보유): ${idle.map(s => s.coin).join(', ')}</div>`
+    : '';
+  const emptyLine = active.length
+    ? ''
+    : `<div style="color:#5b6472; font-size:12px; padding:4px 0;">현재 보유 중인 포지션이 없습니다 — 전액 현금 대기 중</div>`;
+
   return `
-    <table style="width:100%; margin-top:10px; font-size:12px; border-top:1px solid #2a2d35; padding-top:8px;" onclick="event.stopPropagation();">
-      <thead><tr style="color:#9aa0a6;"><th style="text-align:left;">코인</th><th style="text-align:left;">상태</th><th style="text-align:left;">진입가(평단)</th><th style="text-align:left;">현재가</th><th style="text-align:left;">레버리지</th><th style="text-align:left;">평가손익</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>`;
+    <div style="margin-top:10px; border-top:1px solid #2a2d35; padding-top:8px;" onclick="event.stopPropagation();">
+      ${rows}${emptyLine}${idleLine}
+    </div>`;
 }
 
 function renderCards(containerId, mode) {
@@ -320,7 +360,7 @@ function renderCards(containerId, mode) {
     const cardKey = `${mode}__${p.strategy}`;
     const isOpen = expandedCards.has(cardKey);
     container.innerHTML += `
-      <div class="card" onclick="toggleCardDetail('${cardKey}')" style="cursor:pointer;">
+      <div class="card" onclick="toggleCardDetail('${cardKey}')" style="cursor:pointer;${isOpen ? ' grid-column: 1 / -1;' : ''}">
         <h3>${p.strategy} <span style="float:right; color:#5b6472; font-size:11px;">${isOpen ? '▲ 접기' : '▼ 코인별 현황'}</span></h3>
         <div class="${cls}">${p.pnl_pct >= 0 ? '+' : ''}${p.pnl_pct.toFixed(2)}%</div>
         <div class="${cls}" style="font-size:14px;margin-top:2px;">${pnlSign}${Math.round(p.pnl_krw).toLocaleString()}원</div>
@@ -547,30 +587,8 @@ async function load() {
   document.getElementById('status').innerText =
     `마지막 갱신: ${d.meta?.last_run_at || '-'} | 현재가 BTC=${Math.round(d.meta?.prices_krw?.BTC || 0).toLocaleString()}원${dbSizeLabel}`;
 
-  const p = d.progress || {};
-  const dot = document.getElementById('progress-dot');
-  const stageLabel = {idle:'대기 중', collecting:'데이터 수집 중', cycle_running:'매매 사이클 실행 중',
-                      training:'LSTM 학습 중', sleeping:'대기 중', error:'에러'}[p.stage] || p.stage || '알수없음';
-  // progress.updated_at은 main_loop.py가 set_progress()를 호출할 때마다
-  // 찍히는 시각 — watchdog.bat가 보는 heartbeat.txt와 같은 순간에 갱신되는
-  // 값이라, 여기서 "몇 분 전"을 보여주면 워치독이 멈춤으로 판단하기 전에
-  // 사람도 눈으로 먼저 알아챌 수 있다.
-  let ageLabel = '';
-  let staleWarning = false;
-  if (p.updated_at) {
-    const ageSec = (Date.now() - new Date(p.updated_at).getTime()) / 1000;
-    if (ageSec < 90) {
-      ageLabel = `${Math.round(ageSec)}초 전`;
-    } else {
-      const ageMin = Math.round(ageSec / 60);
-      ageLabel = `${ageMin}분 전`;
-      if (ageMin >= 5) staleWarning = true;  // watchdog.bat의 STALE_MINUTES(기본 5분)와 동일 기준
-    }
-  }
-  dot.className = 'dot dot-' + (staleWarning ? 'error' : (p.stage || 'idle'));
-  document.getElementById('progress-text').innerText =
-    `[${stageLabel}] ${p.detail || ''}` + (ageLabel ? ` (${ageLabel})` : '') +
-    (staleWarning ? ' ⚠ 응답 없음 — 멈췄을 수 있음 (watchdog 사용 시 자동 재시작됨)' : '');
+  lastProgress = d.progress || {};
+  tickProgressDisplay();
 
   lastFullData = d;
   renderCards('cards-reset', 'reset');
@@ -614,6 +632,7 @@ async function load() {
 }
 load();
 setInterval(load, 15000);
+setInterval(tickProgressDisplay, 1000);  // "N초 전" 텍스트만 1초마다 갱신 (서버 재요청 없음)
 // 분석팀 리포트는 1시간마다만 바뀌므로 5분 간격이면 충분 — 지금 분석팀 탭을
 // 보고 있을 때만 갱신한다.
 setInterval(() => {
