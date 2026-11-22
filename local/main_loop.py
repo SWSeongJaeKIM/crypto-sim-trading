@@ -162,6 +162,16 @@ _MISSING_COIN_DATA_LOG_INTERVAL_SEC = 3600
 _warned_all_candles_fail: float | None = None
 _ALL_CANDLES_FAIL_LOG_INTERVAL_SEC = 3600
 
+# run_one_cycle()이 가져온 candles[coin]이 HTTP 200 + 정상 JSON이면 무조건
+# "신선한" 데이터로 간주했다 — Upbit이 네트워크 에러 없이 지연/캐시된 응답을
+# 돌려주면 사이클은 "정상 완료"로 기록되고 오래된 가격으로 매매가 조용히
+# 계속되지만 run.log에는 아무 흔적도 남지 않았다 (analysis_team execution
+# 리포트 2026-11-22_1818 발견점 #1, synthesizer Top3 #3). 매매 로직은 건드리지
+# 않고 진단용 경고만 남긴다 — 다른 쓰로틀들과 동일한 코인별 1시간 패턴.
+_warned_stale_candle: dict[str, float] = {}
+_STALE_CANDLE_LOG_INTERVAL_SEC = 3600
+_CANDLE_STALENESS_WARN_SEC = 240  # 4분(Upbit 정상 응답 지연 오탐 방지용 여유 + 사이클 60초 대비 충분한 마진)
+
 # run_one_cycle()에서 len(df) < strat.min_bars()이면(캔들 부족) 그 코인만 이번
 # 사이클 신호 계산을 조용히 건너뛴다(아래 424행 근처). 신규 코인 추가,
 # min_bars() 요구치 증가, count 파라미터 변경 등으로 특정 (전략, 코인) 조합이
@@ -420,6 +430,27 @@ def run_one_cycle(conn) -> None:
                 _warned_missing_coin_data[coin] = now_mono
     else:
         _warned_missing_coin_data.clear()  # 전 코인 복구됐으니 다음 결손 시 즉시 다시 경고
+
+    # "가격이 있음"과 "그 가격이 최신임"은 다른 얘기다 — missing_coins는 전자만
+    # 본다. candle_date_time_kst는 naive KST(UTC+9) 로컬시간이라, UTC now와
+    # 직접 비교하면 9시간 오프셋 오류가 나므로 now를 KST naive로 맞춰 비교한다.
+    now_kst_naive = (datetime.now(timezone.utc) + timedelta(hours=9)).replace(tzinfo=None)
+    now_mono = time.monotonic()
+    for coin, df in candles.items():
+        if not len(df):
+            continue
+        last_open_time = df["open_time"].iloc[-1]
+        staleness_sec = (now_kst_naive - last_open_time).total_seconds()
+        if staleness_sec >= _CANDLE_STALENESS_WARN_SEC:
+            last_logged = _warned_stale_candle.get(coin)
+            if last_logged is None or (now_mono - last_logged) >= _STALE_CANDLE_LOG_INTERVAL_SEC:
+                log.warning(f"[{coin}] 최신 캔들이 {staleness_sec:.0f}초 전 데이터(open_time="
+                             f"{last_open_time}) — Upbit 응답이 지연/캐시됐을 수 있음, 오래된 "
+                             f"가격으로 매매가 계속될 수 있음 (같은 코인은 "
+                             f"{_STALE_CANDLE_LOG_INTERVAL_SEC}초 내 반복 경고 생략)")
+                _warned_stale_candle[coin] = now_mono
+        else:
+            _warned_stale_candle.pop(coin, None)  # 복구됐으니 다음에 다시 지연되면 즉시 경고
 
     # 지난 사이클에 LSTM이 냈던 예측들을 이번 사이클의 실제가로 확정 (적중여부 계산)
     # try/except로 감싼다 (analysis_team execution 리포트 2026-11-21_2320 제안):
