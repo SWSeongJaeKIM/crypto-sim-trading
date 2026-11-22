@@ -152,6 +152,16 @@ _REPEATED_EXCEPTION_LOG_INTERVAL_SEC = 3600  # 1시간(60사이클)마다 전체
 _warned_missing_coin_data: dict[str, float] = {}
 _MISSING_COIN_DATA_LOG_INTERVAL_SEC = 3600
 
+# run_one_cycle() 맨 앞에서 모든 코인의 캔들 수집이 전부 실패하면(Upbit 전체
+# 장애 등) 위 missing_coins(부분 실패)와 달리 지금까지 쓰로틀 없이 매
+# 사이클(최대 1440회/일) log.warning을 그대로 반복 남겼다 (analysis_team
+# execution 리포트 2026-11-22_1723 발견점 #2). 다른 반복 경고들과 같은
+# 패턴으로 1시간에 1회만 전체 경고, 그 사이엔 로그를 생략한다 — heartbeat.txt/
+# progress.stage="error"가 이미 "지금도 실패 중"이라는 정보를 대시보드/
+# 워치독에 매 사이클 전달하므로 run.log 쪽 정보 손실은 적다.
+_warned_all_candles_fail: float | None = None
+_ALL_CANDLES_FAIL_LOG_INTERVAL_SEC = 3600
+
 # run_one_cycle()에서 len(df) < strat.min_bars()이면(캔들 부족) 그 코인만 이번
 # 사이클 신호 계산을 조용히 건너뛴다(아래 424행 근처). 신규 코인 추가,
 # min_bars() 요구치 증가, count 파라미터 변경 등으로 특정 (전략, 코인) 조합이
@@ -375,13 +385,19 @@ def time_until_next_cloud_analysis() -> timedelta:
 
 
 def run_one_cycle(conn) -> None:
+    global _warned_all_candles_fail
     now = datetime.now(timezone.utc).isoformat()
     set_progress("collecting", "최신 1분봉 수집 중...")
     candles = data_fetcher.fetch_all_latest_candles(count=max(lstm_model.SEQ_LEN + 5, 200))
     if not candles:
-        log.warning("캔들 수집 실패 — 이번 사이클 스킵")
+        now_mono = time.monotonic()
+        if _warned_all_candles_fail is None or (now_mono - _warned_all_candles_fail) >= _ALL_CANDLES_FAIL_LOG_INTERVAL_SEC:
+            log.warning(f"캔들 수집 실패 — 이번 사이클 스킵 (같은 상황은 "
+                         f"{_ALL_CANDLES_FAIL_LOG_INTERVAL_SEC}초 내 반복 경고 생략)")
+            _warned_all_candles_fail = now_mono
         set_progress("error", "캔들 수집 실패, 다음 사이클에 재시도")
         return
+    _warned_all_candles_fail = None  # 복구됐으니 다음 전체 실패 시 즉시 다시 경고
 
     set_progress("cycle_running", "5개 전략 신호 계산/매매 중...")
 
