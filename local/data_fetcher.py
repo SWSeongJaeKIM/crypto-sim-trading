@@ -138,10 +138,18 @@ def _parse_minute_df(raw: list[dict]) -> pd.DataFrame:
     return df[["open_time", "open", "high", "low", "close", "volume"]]
 
 
-def fetch_latest_minute_candles(market: str, count: int = 200) -> pd.DataFrame:
-    """가장 최신 1분봉 count개 (실시간 신호 계산용). 마지막 행이 가장 최근 캔들."""
+def fetch_latest_minute_candles(market: str, count: int = 200,
+                                 timeout: int = 5, retries: int = 2) -> pd.DataFrame:
+    """가장 최신 1분봉 count개 (실시간 신호 계산용). 마지막 행이 가장 최근 캔들.
+
+    기본 timeout/retries는 _http_get_json()의 기본값(10/3, fetch_minute_history처럼
+    하루 10회만 호출되는 경로용)보다 짧게 잡았다 — 이 함수는 fetch_all_latest_candles()를
+    통해 60초 주기 매매 사이클마다 호출되므로, 한 코인이 느려지면 최대 10초*3회+백오프
+    ≈33초까지 걸려 CYCLE_ELAPSED_WARN_THRESHOLD_SEC(30초) 경고를 유발할 수 있었다
+    (analysis_team execution 리포트 2026-11-22_0318, synthesizer Top3 #1).
+    """
     url = f"{UPBIT_BASE}/v1/candles/minutes/1?market={market}&count={count}"
-    raw = _http_get_json(url)
+    raw = _http_get_json(url, timeout=timeout, retries=retries)
     if not raw:
         return pd.DataFrame(columns=["open_time", "open", "high", "low", "close", "volume"])
     return _parse_minute_df(raw)
