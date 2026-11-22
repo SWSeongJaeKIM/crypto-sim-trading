@@ -1,47 +1,47 @@
 {
-  "generated_at": "2026-11-22_1518",
+  "generated_at": "2026-11-22_1618",
   "roles": {
     "execution": {
       "role": "execution",
       "role_label": "실행/버그 분석가",
-      "timestamp": "2026-11-22_1518",
-      "path": "analysis_team/reports/2026-11-22_1518_execution.md",
-      "summary": "예외처리·사이클 타이밍·Upbit API 호출 패턴은 수십 차례의 보강을 거쳐 이미 매우 견고하며, 직전 두 회차(1326, 1418)에서 지적된 LSTM predict_proba 중복 호출과 force_full 부분성공 문제는 현재 코드에 모두 반영되어 있다. 새로 찾은 문제는 `da"
+      "timestamp": "2026-11-22_1618",
+      "path": "analysis_team/reports/2026-11-22_1618_execution.md",
+      "summary": "이 파일들은 이전 여러 라운드 리뷰를 거치며 예외처리/페이지네이션/사이클 타이밍/로깅이 매우 꼼꼼하게 보강된 상태이며, 새로 지적할 치명적 문제는 없음. 다만 `fetch_all_minute_history()`의 진행률 콜백 호출 1곳이 \"코인 하나의 장애가 다른 코인을 막지 않는다\"는"
     },
     "lstm": {
       "role": "lstm",
       "role_label": "LSTM 분석가",
-      "timestamp": "2026-11-22_1518",
-      "path": "analysis_team/reports/2026-11-22_1518_lstm.md",
-      "summary": "피처/모델 구조·파인튠 lr·롤백 안전장치 등 핵심 설계는 이전 회차들의 리뷰를 거쳐 이미 합리적인 상태이고(전체재학습 시 롤백 공백도 현재 코드에서 수정 확인됨), 대신 베팅 크기를 정하는 `signal_with_confidence()`의 확신도 계산식에 부호가 뒤집힌 버그가 남아 있"
+      "timestamp": "2026-11-22_1618",
+      "path": "analysis_team/reports/2026-11-22_1618_lstm.md",
+      "summary": "`signal_with_confidence()`의 부호 버그는 올바르게 수정되었고 전반적 구조(피처/파인튠/롤백 안전장치)는 탄탄하나, confidence 공식이 임계값 대칭성에 암묵적으로 의존하는 점과 피처에 타코인(특히 BTC) 상관 신호가 빠진 점이 남은 개선 여지다."
     },
     "risk": {
       "role": "risk",
       "role_label": "리스크 분석가",
-      "timestamp": "2026-11-22_1518",
-      "path": "analysis_team/reports/2026-11-22_1518_risk.md",
-      "summary": "직전 회차에서 지적된 숏 레버리지 사이징 불균형은 `apply_sell_signal`(portfolio.py 279~289행)에 `fraction/LEVERAGE`로 이미 반영되어 해소됐으나, 코인 슬롯 간 \"영구 미재조정\" 구조가 TRADE_FRACTION의 상대적 집중 효과와 결합해"
+      "timestamp": "2026-11-22_1618",
+      "path": "analysis_team/reports/2026-11-22_1618_risk.md",
+      "summary": "직전 지적된 숏/롱 notional 불균형(`apply_sell_signal`의 `fraction/LEVERAGE`)은 코드상 정확히 반영되어 있음을 확인함. 다만 \"코인 슬롯 영구 미재조정 + TRADE_FRACTION 집중\" 구조적 문제는 여전히 남아 있고, 손실 중 포지션을 계속 "
     },
     "storage": {
       "role": "storage",
       "role_label": "데이터/저장소 분석가",
-      "timestamp": "2026-11-22_1518",
-      "path": "analysis_team/reports/2026-11-22_1518_storage.md",
-      "summary": "스키마/인덱스/보관주기/동시성 설계는 수십 차례 리뷰를 거쳐 이미 매우 성숙한 상태이지만, `stop_loss_counts_by_coin()`을 위해 추가했던 `idx_trades_reason` 인덱스가 SQLite의 기본 LIKE 대소문자 구분 설정 때문에 실제로는 전혀 쓰이지 않는다"
+      "timestamp": "2026-11-22_1618",
+      "path": "analysis_team/reports/2026-11-22_1618_storage.md",
+      "summary": "직전 회차의 `case_sensitive_like=ON` 수정(storage.py 277~284행)은 올바르게 적용됐고 부작용도 없음(프로젝트 전체에서 LIKE는 storage.py 2곳뿐, grep으로 확인) — 다만 `snapshots` 테이블에 대해 trades/model_trai"
     },
     "strategy": {
       "role": "strategy",
       "role_label": "전략 분석가",
-      "timestamp": "2026-11-22_1518",
-      "path": "analysis_team/reports/2026-11-22_1518_strategy.md",
-      "summary": "4개 조건식의 로직 자체에 치명적 버그는 없지만, (1) `bollinger_rsi`만 \"레벨 유지형\" 신호라 다른 3개(크로스/전환 \"이벤트형\")와 발생 빈도 구조가 달라 전략 간 공정 비교가 깨질 수 있고, (2) 6개 코인에 변동성 차이를 두지 않고 단일 파라미터셋을 그대로 적용하"
+      "timestamp": "2026-11-22_1618",
+      "path": "analysis_team/reports/2026-11-22_1618_strategy.md",
+      "summary": "4개 조건식의 개별 진입/청산 로직 자체는 각각 타당하지만, 거래량(volume)을 전혀 쓰지 않는 점, 4개 중 3개가 사실상 같은 \"이동평균 교차\" 계열이라 상관관계가 높은 점, trend_follow의 임계값이 변동성에 적응하지 않는 고정 비율인 점이 1분봉 스캘핑 환경에서 리스크"
     },
     "synthesizer": {
       "role": "synthesizer",
       "role_label": "종합 조정자",
-      "timestamp": "2026-11-22_1518",
-      "path": "analysis_team/reports/2026-11-22_1518_synthesizer.md",
-      "summary": "1. **LSTM 확신도 공식 부호 버그 수정** (`lstm_model.py:429-431`). `PROB_BUY_MIN`을 0.55→0.60으로 올리며 `threshold_distance = 0.5 - PROB_BUY_MIN` 공식을 같이 갱신하지 않아 음수가 되고, 확신도 범위가 "
+      "timestamp": "2026-11-22_1618",
+      "path": "analysis_team/reports/2026-11-22_1618_synthesizer.md",
+      "summary": "1. **storage.py — snapshots 테이블에 timestamp 단독 인덱스 추가** (`CREATE INDEX IF NOT EXISTS idx_snapshots_timestamp ON snapshots(timestamp);`, 142행 부근). 기존 복합인덱스(`strat"
     }
   }
 }
