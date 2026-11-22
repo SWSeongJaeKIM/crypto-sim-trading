@@ -145,6 +145,15 @@ _REPEATED_EXCEPTION_LOG_INTERVAL_SEC = 3600  # 1시간(60사이클)마다 전체
 _warned_missing_coin_data: dict[str, float] = {}
 _MISSING_COIN_DATA_LOG_INTERVAL_SEC = 3600
 
+# run_one_cycle()에서 len(df) < strat.min_bars()이면(캔들 부족) 그 코인만 이번
+# 사이클 신호 계산을 조용히 건너뛴다(아래 424행 근처). 신규 코인 추가,
+# min_bars() 요구치 증가, count 파라미터 변경 등으로 특정 (전략, 코인) 조합이
+# 영구적으로 신호 계산에서 빠져도 지금까지는 로그에 전혀 남지 않아 사후 추적이
+# 불가능했다 (analysis_team execution 리포트 2026-11-22_1018 발견점 #1,
+# synthesizer Top3 #1). 코인 수가 적어(6개) 메모리 누적 우려는 없으므로
+# (strat_name, coin) 조합마다 최초 1회만 경고한다.
+_warned_insufficient_bars: set[tuple[str, str]] = set()
+
 
 # retrain_lstm() 실행 중인지(최초 학습 또는 정기 재학습 슬롯) 표시하는 전역
 # 플래그. _handle_sigint가 항상 "이번 사이클 끝나면 정지합니다"라고 출력하면,
@@ -422,6 +431,12 @@ def run_one_cycle(conn) -> None:
                 if strat_name == "lstm_predictor":
                     strat.coin = coin
                 if len(df) < strat.min_bars():
+                    bars_key = (strat_name, coin)
+                    if bars_key not in _warned_insufficient_bars:
+                        log.warning(f"[{strat_name}/{coin}] 캔들 부족(len={len(df)} < "
+                                     f"min_bars={strat.min_bars()}) — 신호 계산 스킵 (이후 동일 "
+                                     f"조합 반복은 로그에 남기지 않음)")
+                        _warned_insufficient_bars.add(bars_key)
                     continue
                 try:
                     # 코인 단위로도 격리한다 (analysis_team execution 리포트
