@@ -286,7 +286,15 @@ class Portfolio:
     def check_stop_loss_and_liquidation(self, coin: str, price_krw: float) -> str | None:
         """현재가 기준으로 롱/숏 포지션의 손절 또는 강제청산 조건을 확인하고,
         필요하면 즉시 청산한다. 청산이 일어났으면 그 사유 문자열을, 아니면
-        None을 반환한다 (대시보드/로그용)."""
+        None을 반환한다 (대시보드/로그용).
+
+        주의: 아래에서 남기는 reason 문자열이 "손절" 또는 "강제청산"으로
+        시작하는 접두어는 storage.py의 stop_loss_counts_by_coin()이 문자열
+        매칭(LIKE '손절%'/'강제청산%')으로 그대로 의존한다. 이 접두어를
+        바꾸면 그 집계 함수도 같이 수정해야 한다 — 안 그러면 에러 없이
+        조용히 0건으로 집계되어 "손절이 전혀 없다"는 잘못된 결론을 낼 수
+        있다 (storage.py의 stop_loss_counts_by_coin() 쪽에 대칭되는 설명이
+        있음, analysis_team storage 리포트 2026-11-22_1219 발견점 #3)."""
         slot = self.slots[coin]
 
         if slot.qty > 0:
