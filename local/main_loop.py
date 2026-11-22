@@ -437,7 +437,18 @@ def run_one_cycle(conn) -> float | None:
 
     set_progress("cycle_running", "5개 전략 신호 계산/매매 중...")
 
-    prices_krw = {coin: float(df["close"].iloc[-1]) for coin, df in candles.items() if len(df)}
+    # len(df)만 보면 "행이 존재하는지"만 확인할 뿐, Upbit 응답에 null 등 비정상
+    # 값이 섞여 float(NaN)이나 0 이하 값이 그대로 들어오는 경우를 걸러내지
+    # 못한다 — 그 경우 신호계산·손절체크·거래체결까지 조용히 오염된 값이
+    # 전파될 수 있었다. pd.notna()와 > 0 조건만 추가해 비정상 값을 가진
+    # 코인을 바로 아래 missing_coins 경로(쓰로틀 경고 + 다음 사이클 자동
+    # 재시도)로 그대로 흘려보낸다 (analysis_team execution 리포트
+    # 2026-11-22_2318 발견점 #2, synthesizer Top3 #1).
+    prices_krw = {
+        coin: float(df["close"].iloc[-1])
+        for coin, df in candles.items()
+        if len(df) and pd.notna(df["close"].iloc[-1]) and df["close"].iloc[-1] > 0
+    }
 
     # 코인 중 일부만 이번 사이클 가격 데이터가 없으면(수집 실패 등), 그
     # 코인의 신호 계산과 손절체크가 모두 조용히 스킵된다 — 다음 사이클(최대
