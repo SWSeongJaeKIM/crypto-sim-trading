@@ -203,6 +203,18 @@ def fetch_latest_minute_candles(market: str, count: int = 200,
     """
     if rate_limiter is not None:
         rate_limiter.wait()
+    # Upbit 분봉 API는 단일 요청(페이지네이션 없음)당 최대 200개까지만
+    # 돌려주며, 모듈 docstring도 이 제한을 명시한다. 이 함수를 호출하는
+    # main_loop.py(fetch_all_latest_candles(count=max(lstm_model.SEQ_LEN + 5, 200)))가
+    # count를 넘기는데, 지금은 SEQ_LEN(60)+5=65로 200보다 작아 문제가 없지만
+    # 코드 어디에도 상한을 강제/경고하는 장치가 없어 향후 SEQ_LEN이 늘어나면
+    # Upbit이 조용히 200개로 잘라 응답하는 "캔들 부족" 경고가 영원히 반복되는
+    # 조용한 회귀가 생길 수 있었다 (analysis_team execution 리포트
+    # 2026-11-22_1219 발견점 #2, synthesizer Top3 #1). 호출자가 몰라도
+    # 안전하도록 피호출부에서 클램프하고, 잘렸을 때만 1회성 디버그 로그를 남긴다.
+    if count > 200:
+        log.debug(f"{market} count={count}가 Upbit 단일 요청 상한(200)을 초과해 200으로 조정")
+        count = 200
     url = f"{UPBIT_BASE}/v1/candles/minutes/1?market={market}&count={count}"
     raw = _http_get_json(url, timeout=timeout, retries=retries)
     if not raw:
