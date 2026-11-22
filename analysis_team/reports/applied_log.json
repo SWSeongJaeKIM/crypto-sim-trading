@@ -1022,5 +1022,77 @@
     "decision": "skipped",
     "reason": "snapshots 테이블에 컬럼을 추가하는 스키마 변경으로, 작업지시서 5번 판단기준에서 명시적으로 제외한 '스키마 마이그레이션처럼 운영 중단이 필요하거나 기존 데이터 변환이 필요한 제안'에 해당함. 사람이 직접 판단할 항목으로 남김.",
     "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0221",
+    "proposal": "storage.py에 prune_model_trainings(conn, keep_days=365) 추가(trained=0만 대상)해 model_trainings 테이블에도 predictions/snapshots와 동일한 보관주기 적용, main_loop.py 일일 prune 블록에 호출 연결",
+    "role": "storage (synthesizer Top3 #1)",
+    "decision": "applied",
+    "reason": "누락된 append-only 테이블 보관주기를 추가하는 구조적 개선이며 매매 판단과 무관. 성공 학습 기록(trained=1)은 모듈 docstring이 명시한 '모델 성능 추이 보존' 의도를 지키기 위해 절대 삭제 대상에서 제외하고 실패 기록(trained=0)만 삭제하도록 범위를 좁혀, 대시보드의 성능 추이 그래프에 영향이 없게 함. in-memory sqlite로 old+trained=0만 삭제되고 old+trained=1/recent+trained=0은 보존됨을 확인.",
+    "commit": "d22989e"
+  },
+  {
+    "timestamp": "2026-11-22_0221",
+    "proposal": "main_loop.py main() 시작부의 storage.connect() 호출(마지막 재학습/prune 기록 조회)을 try/except로 보호해, DB 파일 손상 등으로 while 루프 진입 전에 프로세스 전체가 죽는 것을 방지",
+    "role": "execution (synthesizer Top3 #2)",
+    "decision": "applied",
+    "reason": "명백한 예외처리 누락 수정이며 매매 판단과 무관. 실패 시 last_retrain_at/last_prune_date를 None으로 두는데, 이는 두 값 모두 기존에 '기록 없음(최초 실행)'을 뜻하던 정상 상태라 retrain_is_due()/일일 prune 비교 로직이 이미 올바르게 처리하도록 되어 있어 별도 무한 재시도 로직이 필요 없고(이 조회 자체가 시작 시 1회만 실행되는 범위로 한정됨), 최초 재학습/정리 타이밍만 다소 당겨질 뿐 매매 자체는 영향받지 않음. storage.connect()가 예외를 던지는 상황을 흉내 낸 시뮬레이션으로 프로세스가 죽지 않고 두 변수 모두 None으로 계속 진행됨을 확인.",
+    "commit": "9279453"
+  },
+  {
+    "timestamp": "2026-11-22_0221",
+    "proposal": "data_fetcher.py의 fetch_all_latest_candles/fetch_all_minute_history _fetch_one에 main_loop.py의 기존 (코인, 예외타입)별 쓰로틀링 패턴을 재사용해, 반복 실패 시 1시간에 1회만 전체 트레이스(log.exception)를 남기고 그 사이엔 log.warning만 남기도록 수정",
+    "role": "execution (synthesizer Top3 #3, 2026-11-22_0118 리포트에서 이미 지적됐으나 그 회차엔 미반영)",
+    "decision": "applied",
+    "reason": "로그 폭주를 막는 순수 로깅 개선이며 캐시 폴백 등 기존 예외 처리 분기는 전혀 바꾸지 않아 매매 판단과 무관. main_loop.py에 이미 있는 동일 패턴(1시간 쓰로틀링)을 그대로 재사용해 구현 리스크가 낮음. 모의 KeyError 반복으로 1시간 이내 2차 호출은 짧은 warning만, 1시간 경과 후 3차 호출은 다시 전체 트레이스가 남는 것을 확인.",
+    "commit": "efe841b"
+  },
+  {
+    "timestamp": "2026-11-22_0221",
+    "proposal": "lstm_model.build_features(df, ref_df=None)로 시그니처를 확장해 BTC 등 기준 코인의 수익률(btc_ret)을 FEATURE_COLS에 추가 (main_loop.py가 이미 메모리에 들고 있는 history/candles dict에서 BTC df를 그대로 넘기면 되어 추가 수집 불필요)",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "N_FEATURES가 늘어나 기존에 저장된 {coin}_lstm.pt의 입력층 shape과 더 이상 호환되지 않아 model.load_state_dict()가 예외를 던지므로, 사용자 PC가 git pull 후 재시작했을 때 전면 재학습이 강제됨(판단 기준 3번 위배). 2026-11-16 여러 회차에서 동일한 BTC 상관 피처 제안이 같은 이유로 반복 보류된 바 있고, 이번 리포트가 구현 난이도가 낮아졌다고 재확인했을 뿐 호환성 문제 자체는 해소되지 않아 동일하게 반영하지 않음. 효과(예측 정확도 개선 여부)도 실제 val_accuracy 데이터로만 검증 가능.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0221",
+    "proposal": "lstm_model.py NEUTRAL_BAND(고정 0.05%)를 코인별 변동성 비례값(예: close.pct_change().rolling(60).std() * 0.5)으로 변경",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "모델이 학습하는 라벨(상승/하락/중립 판정) 기준과 예측 신호의 성격이 코인마다 달라지는 변경으로, 리포트 스스로 '코인 간 신호 강도 비교가 더 어려워질 수 있다'는 트레이드오프를 명시해 순효과는 운영 데이터로만 검증 가능함(판단 기준 2번/5번). 과거 회차(2026-11-16_1521)에서도 동일한 이유로 보류된 바 있음.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0221",
+    "proposal": "portfolio.py COINS를 {coin: vol_weight} 형태로 바꿔 초기 자금을 코인별 변동성에 비례 배분하거나, main_loop.py에 MAX_TRADE_FRACTION_BY_COIN dict를 추가해 코인별 베팅 비율 상한을 차등화",
+    "role": "risk (synthesizer Top3 긴장관계 논의 대상)",
+    "decision": "skipped",
+    "reason": "베팅 비율/자금 배분이라는 매매 핵심 판단을 코인별로 바꾸는 제안. risk 리포트 스스로 '고변동성 코인의 수익 기회도 같이 줄인다'는 트레이드오프를 명시해 순효과는 백테스트/실거래 데이터로만 검증 가능함(판단 기준 2번). synthesizer가 risk 쪽 근거가 strategy의 파라미터 단축 제안보다 탄탄하다고 평가했지만, 그 평가는 '먼저 검토할 우선순위'에 대한 것이고 코드 리뷰만으로 반영 여부를 결정할 수 있다는 뜻은 아니므로 이번 회차에는 반영하지 않음.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0221",
+    "proposal": "CoinSlot에 first_entry_price_krw 필드를 추가해 손절 판단 기준을 avg_cost_krw(평단가) 대신 최초 진입가로 바꾸거나 더 보수적인 쪽을 쓰도록 수정",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "손절 기준이라는 매매 핵심 판단을 바꾸는 제안이며, 리포트 자체가 '장기간 완만한 상승 후 작은 되돌림에도 평단가보다 먼저 손절이 걸려 정상적인 피라미딩까지 막을 수 있고, 전략 성격(추세추종 vs 평균회귀)에 따라 유불리가 달라진다'는 트레이드오프를 명시함(판단 기준 2번/5번). 또한 CoinSlot에 새 필드를 추가하면 기존에 저장된 포트폴리오 JSON에는 해당 필드가 없어 하위호환 처리가 필요해 스키마 변경 성격도 일부 가짐(판단 기준 3번과 유사한 위험).",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0221",
+    "proposal": "add_snapshot 호출 시 코인별 슬롯 비중(slot_value / total_value)도 같이 기록해 cumulative 포트폴리오의 비중 드리프트를 대시보드에서 추적 가능하게 함",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "snapshots 테이블(storage.py)에 새 컬럼을 추가해야 하는데, 이 코드베이스에는 기존 사용자 trading.db에 컬럼을 안전하게 추가하는 ALTER TABLE 마이그레이션 경로가 없고(CREATE TABLE IF NOT EXISTS만 있어 이미 생성된 기존 테이블에는 적용되지 않음) 운영 중단 없이 적용하기 어려운 스키마 변경에 해당함(판단 기준 3번 제외 대상). 리포트 자체도 매매 판단을 바꾸는 제안이 아니라 관측용 기능 추가일 뿐이라, 다음 회차 이후 사람이 마이그레이션 방식을 정하고 반영하는 것이 안전함.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0221",
+    "proposal": "strategies.py 1분봉 대비 '교과서 기본값'(MACD 12/26/9, Bollinger 20/2.0, MA 9/26 등)을 스캘핑용으로 단축, 전략 간 룩백 중복 분리, 공통 거래량 필터 추가, trend_follow에 급변동 필터 추가",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "전부 진입/청산 신호를 발생시키는 임계값·조건을 바꾸는 매매 핵심 판단이며, 리포트 스스로 모든 제안에 대해 '노이즈·수수료 증가', '저유동성 구간 신호 누락', '설계 의도에서 벗어나 성과가 나빠질 가능성' 등 백테스트 없이는 순효과를 판단할 수 없는 트레이드오프를 명시함(판단 기준 5번). 2026-11-16 여러 회차에서 거의 동일한 제안들이 이미 같은 이유로 반복 보류된 바 있어 이번에도 동일하게 반영하지 않음.",
+    "commit": null
   }
 ]
