@@ -1,47 +1,47 @@
 {
-  "generated_at": "2026-11-22_1618",
+  "generated_at": "2026-11-22_1723",
   "roles": {
     "execution": {
       "role": "execution",
       "role_label": "실행/버그 분석가",
-      "timestamp": "2026-11-22_1618",
-      "path": "analysis_team/reports/2026-11-22_1618_execution.md",
-      "summary": "이 파일들은 이전 여러 라운드 리뷰를 거치며 예외처리/페이지네이션/사이클 타이밍/로깅이 매우 꼼꼼하게 보강된 상태이며, 새로 지적할 치명적 문제는 없음. 다만 `fetch_all_minute_history()`의 진행률 콜백 호출 1곳이 \"코인 하나의 장애가 다른 코인을 막지 않는다\"는"
+      "timestamp": "2026-11-22_1723",
+      "path": "analysis_team/reports/2026-11-22_1723_execution.md",
+      "summary": "예외처리·로깅·Upbit 호출 패턴은 이미 수십 차례의 분석을 거쳐 매우 견고한 상태이고, 재학습 중 매매 사이클이 멈추는 구조적 문제는 여러 차례 검토 후 동시성 위험(모델 파일 비원자적 쓰기) 때문에 의도적으로 보류된 상태다. 이번 리뷰에서 실제로 코드를 직접 확인해 아직 반영되지 "
     },
     "lstm": {
       "role": "lstm",
       "role_label": "LSTM 분석가",
-      "timestamp": "2026-11-22_1618",
-      "path": "analysis_team/reports/2026-11-22_1618_lstm.md",
-      "summary": "`signal_with_confidence()`의 부호 버그는 올바르게 수정되었고 전반적 구조(피처/파인튠/롤백 안전장치)는 탄탄하나, confidence 공식이 임계값 대칭성에 암묵적으로 의존하는 점과 피처에 타코인(특히 BTC) 상관 신호가 빠진 점이 남은 개선 여지다."
+      "timestamp": "2026-11-22_1723",
+      "path": "analysis_team/reports/2026-11-22_1723_lstm.md",
+      "summary": "FEATURE_COLS가 조건식(strategies.py)과 동일 지표만 재사용해 LSTM만의 차별화된 정보가 부족하고, 모델 구조/학습 주기/롤백 안전장치는 이미 적절히 설계되어 있다."
     },
     "risk": {
       "role": "risk",
       "role_label": "리스크 분석가",
-      "timestamp": "2026-11-22_1618",
-      "path": "analysis_team/reports/2026-11-22_1618_risk.md",
-      "summary": "직전 지적된 숏/롱 notional 불균형(`apply_sell_signal`의 `fraction/LEVERAGE`)은 코드상 정확히 반영되어 있음을 확인함. 다만 \"코인 슬롯 영구 미재조정 + TRADE_FRACTION 집중\" 구조적 문제는 여전히 남아 있고, 손실 중 포지션을 계속 "
+      "timestamp": "2026-11-22_1723",
+      "path": "analysis_team/reports/2026-11-22_1723_risk.md",
+      "summary": "TRADE_FRACTION 50% 집중 리스크와 물타기형 손절선 후퇴 문제는 이미 이전 분석에서 발견되어 코드에 반영되어 있고, 지금 구조는 전반적으로 양호하다. 남은 과제는 \"코인별 리스크 비대칭\"과 \"시장 전체 동시 충격\" 여부를 구분할 지표가 부족하다는 점이다."
     },
     "storage": {
       "role": "storage",
       "role_label": "데이터/저장소 분석가",
-      "timestamp": "2026-11-22_1618",
-      "path": "analysis_team/reports/2026-11-22_1618_storage.md",
-      "summary": "직전 회차의 `case_sensitive_like=ON` 수정(storage.py 277~284행)은 올바르게 적용됐고 부작용도 없음(프로젝트 전체에서 LIKE는 storage.py 2곳뿐, grep으로 확인) — 다만 `snapshots` 테이블에 대해 trades/model_trai"
+      "timestamp": "2026-11-22_1723",
+      "path": "analysis_team/reports/2026-11-22_1723_storage.md",
+      "summary": "인덱스/보관주기/동시성 처리는 이전 여러 차례의 분석을 거쳐 쿼리 패턴에 맞게 이미 잘 구현되어 있으며, 남은 가장 구체적인 개선 여지는 `snapshots` 테이블의 보관주기 설정값과 `portfolios` 합성키 스키마 두 가지다."
     },
     "strategy": {
       "role": "strategy",
       "role_label": "전략 분석가",
-      "timestamp": "2026-11-22_1618",
-      "path": "analysis_team/reports/2026-11-22_1618_strategy.md",
-      "summary": "4개 조건식의 개별 진입/청산 로직 자체는 각각 타당하지만, 거래량(volume)을 전혀 쓰지 않는 점, 4개 중 3개가 사실상 같은 \"이동평균 교차\" 계열이라 상관관계가 높은 점, trend_follow의 임계값이 변동성에 적응하지 않는 고정 비율인 점이 1분봉 스캘핑 환경에서 리스크"
+      "timestamp": "2026-11-22_1723",
+      "path": "analysis_team/reports/2026-11-22_1723_strategy.md",
+      "summary": "4개 조건식 모두 로직 자체는 교과서적으로 타당하지만, 파라미터는 일봉/시간봉급 기본값을 그대로 쓰고 있고, 거래량을 전혀 반영하지 않아 1분봉 스캘핑 환경(노이즈·급등락·거래량 바닥)에 취약하다."
     },
     "synthesizer": {
       "role": "synthesizer",
       "role_label": "종합 조정자",
-      "timestamp": "2026-11-22_1618",
-      "path": "analysis_team/reports/2026-11-22_1618_synthesizer.md",
-      "summary": "1. **storage.py — snapshots 테이블에 timestamp 단독 인덱스 추가** (`CREATE INDEX IF NOT EXISTS idx_snapshots_timestamp ON snapshots(timestamp);`, 142행 부근). 기존 복합인덱스(`strat"
+      "timestamp": "2026-11-22_1723",
+      "path": "analysis_team/reports/2026-11-22_1723_synthesizer.md",
+      "summary": "**1. data_fetcher.py 478-480행 — on_progress 콜백 예외처리 추가 (execution)**"
     }
   }
 }
