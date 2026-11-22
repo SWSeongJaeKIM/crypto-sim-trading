@@ -2118,5 +2118,77 @@
     "decision": "skipped",
     "reason": "리포트 스스로 '구조적 제약(오더북 미수집, Strategy 인터페이스가 단일 코인 df만 받음)이라 당장 우선순위는 낮고 억지로 급히 고칠 항목은 아니다'라고 명시한 중장기 과제. 기존 모델 가중치 차원과도 맞지 않아 전 코인 재학습이 필요한 큰 변경이라 이번 회차에는 반영하지 않음.",
     "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_1518",
+    "proposal": "signal_with_confidence()의 threshold_distance = 0.5 - PROB_BUY_MIN 공식 부호 수정 (PROB_BUY_MIN - 0.5로)",
+    "role": "lstm / synthesizer(Top1)",
+    "decision": "applied",
+    "reason": "PROB_BUY_MIN을 0.55->0.60으로 올리며 같이 갱신되지 않아 음수가 된 명백한 버그. 확신도 범위가 [0,1]이 아닌 [0.33,1]로 압축되어 의도(애매한 신호 축소)와 반대로 동작하고 있었음. 코드 로직만으로 버그와 수정 효과가 명확히 검증 가능하고(수치 시뮬레이션으로 수정 전/후 값 확인), 공식 자체의 1줄 수정이라 기존 동작을 깨뜨릴 위험이 낮음. 베팅 크기가 작아지는 방향 변화는 60행 주석의 원래 의도와 일치.",
+    "commit": "7e2bb4c"
+  },
+  {
+    "timestamp": "2026-11-22_1518",
+    "proposal": "data_fetcher.py fetch_minute_history()의 stuck_count>=3(멈춘 페이지네이션) break 분기에 is_partial=True 추가",
+    "role": "execution / synthesizer(Top2)",
+    "decision": "applied",
+    "reason": "같은 함수의 다른 두 중단 분기(max_pages 도달, 페이지 요청 실패)는 모두 is_partial=True를 세팅하는데 이 분기만 빠져 있던 명백한 누락. 기존 패턴과 통일하는 1줄 추가로 리스크가 낮고, 모킹 테스트로 수정 전(is_partial=False)/후(is_partial=True) 동작을 코드만으로 검증함.",
+    "commit": "5e7a0eb"
+  },
+  {
+    "timestamp": "2026-11-22_1518",
+    "proposal": "storage.py connect()에 PRAGMA case_sensitive_like=ON 추가해 idx_trades_reason 인덱스가 실제로 쓰이게 함",
+    "role": "storage / synthesizer(Top3)",
+    "decision": "applied",
+    "reason": "EXPLAIN QUERY PLAN으로 기존 인덱스가 전혀 안 쓰이고 있음(SCAN trades)을 코드 재현으로 직접 확인했고, PRAGMA 적용 후 인덱스를 타는 것과 쿼리 결과가 수정 전/후 동일함을 검증함. 이 저장소의 LIKE 사용처가 고정 한글 접두어 매칭 2곳뿐이라 부작용 범위가 작고 기존 동작을 깨뜨릴 위험이 낮음. 성능 최적화이자 기존에 '해결했다'고 문서화된 상태를 실제로 완성시키는 수정.",
+    "commit": "7dd2360"
+  },
+  {
+    "timestamp": "2026-11-22_1518",
+    "proposal": "main_loop.py run_one_cycle() 정상 완료 직후 set_progress('idle', '대기 중') 호출 추가",
+    "role": "execution",
+    "decision": "applied",
+    "reason": "순수 대시보드 표시 문제(매매 로직 영향 없음)로 synthesizer Top3에는 포함되지 않았으나 직접 '영향도가 작은 1줄 수정'으로 언급됨. dashboard.py가 이미 idle stage를 처리하므로 대시보드 쪽 추가 수정도 불필요해 리스크가 매우 낮음.",
+    "commit": "6170ee2"
+  },
+  {
+    "timestamp": "2026-11-22_1518",
+    "proposal": "portfolio.py에 slot_values_krw() 추가 + storage.add_snapshot에 코인별 슬롯 비중(JSON 컬럼 등) 저장 (드리프트 측정 1단계)",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "리포트가 스스로 'DB 스키마와 storage.py/dashboard.py 수정 범위가 커지고 기존 저장 레코드와의 마이그레이션 고려가 필요하다'고 명시함 — 판단 기준 5번(스키마 마이그레이션처럼 기존 데이터 변환이 필요한 제안 제외)에 해당해 반영하지 않음. 코인별 슬롯 드리프트가 실제로 존재하는지 자체는 타당한 관찰이나, 이를 코드로 측정하려면 스키마 변경이 선행돼야 해서 이번 회차 범위를 벗어남.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_1518",
+    "proposal": "(2단계, 측정 후 판단) 누적 포트폴리오에 rebalance_slots() 도입해 코인 슬롯 드리프트 완화",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "리포트 스스로 '측정(1단계)부터 먼저 하고 실제 드리프트 크기를 운영 데이터로 확인한 뒤 결정하는 것이 안전하다'고 명시함. 1단계(슬롯 비중 측정)조차 반영하지 않았으므로 2단계는 더더욱 운영 데이터 없이 판단 불가. 매매의 핵심 판단(리밸런싱 정책)을 바꾸는 변경이라 백테스트/실데이터 검증 필수.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_1518",
+    "proposal": "strategies.py bollinger_rsi.signal()을 '레벨 유지형'에서 다른 3개 전략과 같은 '전환 이벤트형'으로 변경 (밴드 진입 순간에만 1회 신호)",
+    "role": "strategy / synthesizer(충돌 중재: risk의 '측정 우선' 채택)",
+    "decision": "skipped",
+    "reason": "전략의 핵심 매매 판단(진입/청산 신호 발생 방식)을 바꾸는 변경으로, strategy 리포트 스스로 '변경 전후 백테스트 비교가 필요하다'고 명시함. synthesizer도 strategy(구조 먼저 변경)와 risk(측정 먼저)의 의견 충돌에서 '운영 데이터 없이는 성과 영향을 예측할 수 없다'며 risk의 측정 우선 접근을 채택함. 기존에 의도된 '하락 구간 반복 매수(물타기)' 동작일 수도 있어 운영 데이터 기반 백테스트 검증 없이는 반영 위험이 큼.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_1518",
+    "proposal": "strategies.py default_params()에 코인별 파라미터 오버라이드(COIN_PARAM_OVERRIDES) 추가해 코인마다 다른 변동성에 맞춤",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "전략 파라미터(임계값)를 코인별로 바꾸는 핵심 매매 판단 변경이며, 적정 오버라이드 값 자체를 코드 리뷰만으로 산정할 수 없고 백테스트/실거래 데이터가 필요함. 리포트 스스로도 '튜닝할 변수가 6배로 늘어 learner.py의 탐색 공간과 과최적화 위험이 커진다'고 명시해 리스크가 낮지 않음.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_1518",
+    "proposal": "lstm_model.py FEATURE_COLS에 bb_width(밴드 폭/변동성 크기) 피처 추가",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "리포트가 '저우선'으로 분류한 보완 아이디어이며, 입력 차원이 바뀌어 적용 시 전체 재학습(finetune=False)이 전 코인에 대해 필요하다고 리포트 스스로 명시함. 사용자 PC에 이미 저장된 모델 파일(기존 FEATURE_COLS 차원 기준)과 호환되지 않아, 재학습 전까지는 예측 자체가 깨질 수 있는 운영 중단 위험이 있어 '기존 동작을 깨뜨릴 위험이 낮을 것' 기준에 부합하지 않음.",
+    "commit": null
   }
 ]
