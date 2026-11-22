@@ -148,7 +148,25 @@ def _http_get_json(url: str, timeout: int = 10, retries: int = 3) -> dict | list
             # 실패까지 걸리는 시간에 불필요한 지연이 매번 더해졌다
             # (analysis_team execution 리포트 2026-11-22_0718 발견점 #2).
             if attempt < retries - 1:
-                time.sleep(1.0 * (attempt + 1))
+                sleep_sec = 1.0 * (attempt + 1)
+                if isinstance(e, urllib.error.HTTPError) and e.code == 429:
+                    # Upbit이 레이트리밋(429) 응답에 Retry-After 헤더로 다음
+                    # 요청까지 기다려야 할 시간(초)을 알려주는 경우, 고정
+                    # 백오프(1초, 2초)보다 이 값을 우선한다 — 서버가 요구하는
+                    # 시간보다 일찍 재시도해 추가로 429를 받는 상황을 줄인다
+                    # (analysis_team execution 리포트 2026-11-22_1018 발견점
+                    # #2). 다만 60초 사이클마다 호출되는
+                    # fetch_latest_minute_candles(timeout=5, retries=2)가
+                    # 이 때문에 사이클 드리프트 경고 임계값(30초)을 넘길
+                    # 정도로 오래 멈추면 안 되므로 상한(5초)을 둔다. 헤더가
+                    # 없거나 값 파싱이 실패하면 기존 고정 백오프로 폴백한다.
+                    retry_after = e.headers.get("Retry-After") if e.headers else None
+                    if retry_after is not None:
+                        try:
+                            sleep_sec = min(float(retry_after), 5.0)
+                        except (TypeError, ValueError):
+                            pass
+                time.sleep(sleep_sec)
     raise FetchError(f"GET failed after {retries} retries: {url} ({last_err})")
 
 
