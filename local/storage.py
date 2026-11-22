@@ -162,6 +162,15 @@ DROP INDEX IF EXISTS idx_predictions_coin;
 DROP INDEX IF EXISTS idx_predictions_unresolved;
 CREATE INDEX IF NOT EXISTS idx_predictions_coin_resolved_time ON predictions(coin, resolved, predicted_at DESC);
 CREATE INDEX IF NOT EXISTS idx_predictions_resolved_time ON predictions(resolved, predicted_at DESC);
+-- prediction_accuracy_by_coin()이 "WHERE resolved=1"로 걸러낸 뒤
+-- "PARTITION BY coin ORDER BY predicted_at DESC"로 ROW_NUMBER()를 매기는데,
+-- 위 idx_predictions_coin_resolved_time은 coin이 선두 컬럼이라 coin 필터가
+-- 없는 이 쿼리에는 못 쓰이고, idx_predictions_resolved_time은 coin 순서가
+-- 없어 파티션 전에 추가 정렬(SORTER)이 필요하다. resolved -> coin -> 시간
+-- 순서의 복합 인덱스를 추가해 정렬 없이 파티션별로 바로 순회할 수 있게 한다
+-- (analysis_team storage 리포트 2026-11-22_0417 발견점 #1, synthesizer
+-- Top3 #3).
+CREATE INDEX IF NOT EXISTS idx_predictions_resolved_coin_time ON predictions(resolved, coin, predicted_at DESC);
 """
 
 
