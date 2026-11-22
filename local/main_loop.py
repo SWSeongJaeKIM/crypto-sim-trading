@@ -494,6 +494,12 @@ def run_one_cycle(conn) -> float | None:
         log.exception(f"LSTM 예측 확정 중 에러, 이번 사이클은 스킵 (다음 사이클에 재시도, "
                        f"전략 매매 로직에는 영향 없음): {e}")
 
+    # 이번 사이클에 전략x포트폴리오 전체에서 실제로 체결된 거래 건수(analysis_team
+    # execution 리포트 2026-11-22_2224 발견점 #1, synthesizer Top3 #2) — run.log만
+    # 보고 "신호가 없어서 거래가 없었는지"와 "거래가 있었는데 로그에 안 보였는지"를
+    # 구분할 수 없던 공백을 메운다. 매매 로직에는 영향 없는 순수 집계용 카운터.
+    _trades_this_cycle = 0
+
     for strat_name in STRATEGY_NAMES:
         # 전략 하나당 try/except로 격리한다. run_one_cycle() 전체가
         # storage.connect()의 with 블록(한 트랜잭션) 안에서 도는데, 예전에는
@@ -617,7 +623,13 @@ def run_one_cycle(conn) -> float | None:
                 # 리포트 2026-11-22_0918 발견점 #4, synthesizer Top3 #2).
                 pf.update_drawdown(total_value)
                 storage.set_portfolio(conn, key, pf.to_doc(), now)
-                storage.add_trades(conn, key, pf.new_trades_as_dicts())
+                # new_trades_as_dicts()는 [asdict(t) for t in self.new_trades]로 순수
+                # 읽기 연산이라(portfolio.py) 변수로 캐싱해 재사용해도 안전하다 — 이번
+                # 사이클 거래 건수 집계를 위해 한 번만 계산해서 add_trades와 카운터
+                # 양쪽에 쓴다.
+                _trades = pf.new_trades_as_dicts()
+                storage.add_trades(conn, key, _trades)
+                _trades_this_cycle += len(_trades)
                 storage.add_snapshot(conn, key, now, total_value, pnl_pct)
                 # 코인별 자금 쏠림(slot) 시계열 — cumulative 모드에서 반복
                 # 손절로 생기는 코인 간 드리프트를 사후 분석할 수 있게 한다.
@@ -643,7 +655,7 @@ def run_one_cycle(conn) -> float | None:
     except Exception as e:
         log.exception(f"상태 메타(status) 갱신 중 에러, 이번 사이클은 스킵 (다음 사이클에 재시도, "
                        f"이미 처리된 전략들의 매매 기록에는 영향 없음): {e}")
-    log.info(f"사이클 완료 @ {now} | 가격 샘플 BTC={prices_krw.get('BTC')}")
+    log.info(f"사이클 완료 @ {now} | 가격 샘플 BTC={prices_krw.get('BTC')} | 거래 {_trades_this_cycle}건")
     # 정상 완료 시 progress.stage를 "cycle_running"에 멈춰두지 않고 "idle"로
     # 되돌린다 — 그동안은 다음 사이클 시작(위 379행 "collecting")까지 약 55초+
     # 동안 대시보드가 실제로는 대기 중인데도 "신호 계산/매매 중"으로 표시됐다
