@@ -1,47 +1,47 @@
 {
-  "generated_at": "2026-11-22_0517",
+  "generated_at": "2026-11-22_0618",
   "roles": {
     "execution": {
       "role": "execution",
       "role_label": "실행/버그 분석가",
-      "timestamp": "2026-11-22_0517",
-      "path": "analysis_team/reports/2026-11-22_0517_execution.md",
-      "summary": "두 파일 모두 이미 과거 분석팀 리포트들을 반영해 예외 격리, 로그 쓰로틀링, 사이클 드리프트 보정이 꼼꼼히 구현돼 있으며, 추가로 발견한 문제는 \"이미 있는 보호 로직이 특정 예외 종류/위치에서만 빠져 있는\" 수준의 보완 포인트 2건이다."
+      "timestamp": "2026-11-22_0618",
+      "path": "analysis_team/reports/2026-11-22_0618_execution.md",
+      "summary": "예외처리·로깅·60초 사이클 드리프트 보정은 이미 여러 차례의 자체 분석을 거쳐 견고하게 구현돼 있고 이번 검토에서 새로운 치명적 결함은 발견되지 않았다. 다만 \"재학습마다 90일치 1분봉을 매번 전체 재수집\"하는 구조적 비효율과 \"재학습 중 Ctrl+C 종료 메시지 부정확\"은 과거에 "
     },
     "lstm": {
       "role": "lstm",
       "role_label": "LSTM 분석가",
-      "timestamp": "2026-11-22_0517",
-      "path": "analysis_team/reports/2026-11-22_0517_lstm.md",
-      "summary": "피처 구성·모델 크기·파인튤 안전장치는 1분봉 예측이라는 저신호 과제에 맞게 이미 신중하게 설계돼 있고, 지난 리포트가 지적했던 \"finetune_chain_length 기록만 되고 조치 없음\" 문제도 `main_loop.py`의 `FINETUNE_CHAIN_LENGTH_RESET_TH"
+      "timestamp": "2026-11-22_0618",
+      "path": "analysis_team/reports/2026-11-22_0618_lstm.md",
+      "summary": "피처·모델 구조는 데이터 양과 문제 난이도에 맞게 보수적으로 잘 설계되어 있고, 과거 리뷰(analysis_team 리포트)가 지적한 파인튠 누적 문제도 메타 추적까지는 반영됐으나 자동 정책은 아직 없다 — 억지로 더 고칠 곳을 찾기보다 이 미완성 지점과 피처 공백 한 가지만 짚는다."
     },
     "risk": {
       "role": "risk",
       "role_label": "리스크 분석가",
-      "timestamp": "2026-11-22_0517",
-      "path": "analysis_team/reports/2026-11-22_0517_risk.md",
-      "summary": "자금 집중 리스크(TRADE_FRACTION)와 \"손실 중 물타기\" 리스크는 이미 과거 분석팀 리포트를 거쳐 코드상 상당 부분 해소되어 있고, 남은 리스크는 코인별 변동성 차이를 반영하지 못하는 \"균등 배분·균등 손절선\" 구조와 리스크 조정 지표 부재 쪽에 있다."
+      "timestamp": "2026-11-22_0618",
+      "path": "analysis_team/reports/2026-11-22_0618_risk.md",
+      "summary": "자금배분(코인 파티션 + 확신도 기반 10~90% 베팅)과 손절 로직(최초진입가 고정)은 이미 집중 리스크와 물타기형 손절 왜곡을 구조적으로 막아두었고 전반적으로 양호하나, 변동성 차등 미반영과 \"손절 전 추가매수로 포지션 규모가 커지는\" 잔존 리스크, 리스크조정 지표 부재가 보완 포인"
     },
     "storage": {
       "role": "storage",
       "role_label": "데이터/저장소 분석가",
-      "timestamp": "2026-11-22_0517",
-      "path": "analysis_team/reports/2026-11-22_0517_storage.md",
-      "summary": "storage.py는 이미 여러 차례의 자체 분석 이력(주석에 명시된 analysis_team 리포트들)을 통해 인덱스/보관주기/동시성 문제를 대부분 해결한 상태이며, 실질적으로 남은 이슈는 적다."
+      "timestamp": "2026-11-22_0618",
+      "path": "analysis_team/reports/2026-11-22_0618_storage.md",
+      "summary": "`local/storage.py`는 이미 다수의 반복 검토(analysis_team 리포트 수십 건)를 거치며 인덱스·보관주기(prune)·동시성·포트폴리오 키 조립 로직을 상당히 성숙한 수준으로 다듬어 놓았다. 새로 억지로 문제를 만들 필요는 없고, 남은 항목은 모두 \"경미하거나 이미"
     },
     "strategy": {
       "role": "strategy",
       "role_label": "전략 분석가",
-      "timestamp": "2026-11-22_0517",
-      "path": "analysis_team/reports/2026-11-22_0517_strategy.md",
-      "summary": "4개 조건식 모두 로직 자체는 교과서적으로 타당하나, 파라미터가 일봉/스윙용 표준값을 그대로 가져온 흔적이 뚜렷하고, 두 전략(ma_cross_rsi·macd_momentum)이 사실상 같은 신호를 내며, 볼륨 필터가 전혀 없어 급등락 시 취약하다."
+      "timestamp": "2026-11-22_0618",
+      "path": "analysis_team/reports/2026-11-22_0618_strategy.md",
+      "summary": "4개 조건식의 개별 로직 자체는 각각 타당하지만, 기본 파라미터가 1분봉이 아닌 일봉/스윙 교과서 값 그대로이고, `ma_cross_rsi`와 `macd_momentum`이 거의 같은 구간(26)에서 반응해 상관관계가 높으며, 네 전략 모두 `volume` 컬럼을 전혀 쓰지 않아 급락·"
     },
     "synthesizer": {
       "role": "synthesizer",
       "role_label": "종합 조정자",
-      "timestamp": "2026-11-22_0517",
-      "path": "analysis_team/reports/2026-11-22_0517_synthesizer.md",
-      "summary": "**1. data_fetcher.py 예외 처리 범위 확장 (execution #1)**"
+      "timestamp": "2026-11-22_0618",
+      "path": "analysis_team/reports/2026-11-22_0618_synthesizer.md",
+      "summary": "1. **trades.reason 인덱스 추가** (storage) — `CREATE INDEX IF NOT EXISTS idx_trades_reason ON trades(reason)` 한 줄로 dashboard.py의 stop_loss_counts_by_coin() LIKE 풀스캔 "
     }
   }
 }
