@@ -54,6 +54,12 @@ SNAPSHOTS_PRUNE_KEEP_DAYS = 365   # snapshots 테이블도 predictions와 동일
                                    # 패턴이라 보관주기를 둔다 (analysis_team 리포트
                                    # 2026-11-21_2221_storage.md). predictions(90일)보다 길게 잡아
                                    # 장기 pnl 추이를 직접 확인할 여지를 더 남겨둔다.
+MODEL_TRAININGS_PRUNE_KEEP_DAYS = 365  # model_trainings도 동일한 append-only 누적
+                                   # 패턴이라 보관주기를 둔다 (analysis_team 리포트
+                                   # 2026-11-22_0221_storage.md, synthesizer Top3 #1). 성공한
+                                   # 학습 기록(trained=1)은 모델 성능 추이 보존을 위해 절대
+                                   # 지우지 않고, 실패 기록(trained=0)만 대상으로 한다 — 자세한
+                                   # 이유는 storage.prune_model_trainings() docstring 참고.
 STRATEGY_NAMES = list(ALL_STRATEGIES.keys()) + ["lstm_predictor"]
 RESET_DAYS = 7                # "리셋" 포트폴리오를 며칠마다 1000만원으로 초기화할지
 PORTFOLIO_MODES = ["reset", "cumulative"]
@@ -656,6 +662,11 @@ def main():
                     # 있어 같은 유지보수 시점에 같이 정리한다 (analysis_team 리포트
                     # 2026-11-21_2221_storage.md).
                     n_pruned_snapshots = storage.prune_snapshots(conn, keep_days=SNAPSHOTS_PRUNE_KEEP_DAYS)
+                    # model_trainings도 predictions/snapshots와 같은 유지보수 시점에
+                    # 함께 정리한다 (analysis_team 리포트 2026-11-22_0221_storage.md,
+                    # synthesizer Top3 #1). trained=0(실패 기록)만 대상이라 모델
+                    # 성능 추이(trained=1)는 전혀 영향받지 않는다.
+                    n_pruned_trainings = storage.prune_model_trainings(conn, keep_days=MODEL_TRAININGS_PRUNE_KEEP_DAYS)
                     # WAL 파일도 함께 줄인다 — 다른 커넥션이 몰려 있으면 부분적으로만
                     # 체크포인트되고 예외 없이 끝나므로 트레이딩 사이클에 안전하다.
                     conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -664,10 +675,12 @@ def main():
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                         "rows_deleted": n_pruned,
                         "snapshots_rows_deleted": n_pruned_snapshots,
+                        "model_trainings_rows_deleted": n_pruned_trainings,
                     })
                 last_prune_date = today_str
                 log.info(f"predictions 보관주기 정리 완료: {n_pruned}건 삭제 (keep_days={PREDICTIONS_PRUNE_KEEP_DAYS}), "
-                         f"snapshots {n_pruned_snapshots}건 삭제 (keep_days={SNAPSHOTS_PRUNE_KEEP_DAYS})")
+                         f"snapshots {n_pruned_snapshots}건 삭제 (keep_days={SNAPSHOTS_PRUNE_KEEP_DAYS}), "
+                         f"model_trainings {n_pruned_trainings}건 삭제 (keep_days={MODEL_TRAININGS_PRUNE_KEEP_DAYS}, trained=0만 대상)")
             except Exception as e:
                 log.exception(f"predictions/snapshots 보관주기 정리 중 에러 (다음 사이클에 재시도): {e}")
 

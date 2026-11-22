@@ -454,6 +454,27 @@ def prune_snapshots(conn, keep_days: int = 365) -> int:
     return cur.rowcount if cur.rowcount is not None and cur.rowcount > 0 else 0
 
 
+def prune_model_trainings(conn, keep_days: int = 365) -> int:
+    """model_trainings도 predictions/snapshots와 동일한 append-only 누적
+    테이블이라(재학습마다 코인당 1행) 보관주기가 빠져 있었다 (analysis_team
+    리포트 2026-11-22_0221_storage.md, synthesizer Top3 #1). 다만 이 테이블은
+    모듈 docstring(15~23행)이 명시한 대로 "이 모델이 언제, 어떤 데이터로
+    학습됐고 정확도가 얼마였는지"를 시간순으로 전부 보존해 대시보드에서 모델
+    성능 추이를 보는 용도라서, 성공한 학습 기록(trained=1)은 절대 지우지
+    않는다 — keep_days보다 오래되고 실패한 학습 기록(trained=0)만 지운다.
+    predictions(90일)보다 하루 재학습 횟수가 훨씬 적어(코인당 최대 10행/일)
+    당장 급한 정리는 아니지만, 재학습 주기가 더 짧아질 경우를 대비한 사전
+    조치다. timestamp는 add_model_training()이 저장하는 ISO8601 UTC
+    문자열이라 문자열 비교로도 시간 순서가 맞는다(prune_predictions와 동일한
+    방식). 반환값: 삭제된 행 수."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).isoformat()
+    cur = conn.execute(
+        "DELETE FROM model_trainings WHERE trained = 0 AND timestamp < ?",
+        (cutoff,),
+    )
+    return cur.rowcount if cur.rowcount is not None and cur.rowcount > 0 else 0
+
+
 def prediction_accuracy(conn, coin: str | None = None, limit: int = 500) -> dict:
     """확정된(resolved=1) 예측들의 적중률 요약. coin 생략하면 전체 코인 합산."""
     if coin:
