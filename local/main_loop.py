@@ -146,9 +146,22 @@ _warned_missing_coin_data: dict[str, float] = {}
 _MISSING_COIN_DATA_LOG_INTERVAL_SEC = 3600
 
 
+# retrain_lstm() 실행 중인지(최초 학습 또는 정기 재학습 슬롯) 표시하는 전역
+# 플래그. _handle_sigint가 항상 "이번 사이클 끝나면 정지합니다"라고 출력하면,
+# 재학습(수 분~수십 분 소요, HISTORY_DAYS_FOR_TRAIN일치 재수집+학습)이 진행
+# 중일 때 Ctrl+C를 눌러도 똑같은 메시지가 나와 운영자가 "곧 멈춘다"고 오해할
+# 수 있었다 — 실제로는 재학습이 끝나야 _stop이 반영된다 (analysis_team
+# execution 리포트 2026-11-22_0618 발견점 #2, synthesizer 참고). retrain_lstm()
+# 자체는 그대로 두고 호출부에서만 켜고/끄므로 재학습 로직에는 영향이 없다.
+_in_retrain = False
+
+
 def _handle_sigint(signum, frame):
     global _stop
-    log.info("종료 신호 수신 — 이번 사이클 끝나면 정지합니다.")
+    if _in_retrain:
+        log.info("종료 신호 수신 — LSTM 재학습이 끝나야 정지합니다 (최대 수십 분 소요 가능).")
+    else:
+        log.info("종료 신호 수신 — 이번 사이클 끝나면 정지합니다.")
     _stop = True
 
 
@@ -631,11 +644,14 @@ def main():
     missing_models = [c for c in COINS if not (lstm_model.MODEL_DIR / f"{c}_lstm.pt").exists()]
     if missing_models:
         log.info(f"저장된 LSTM 모델이 없는 코인: {missing_models} — 최초 학습을 먼저 수행합니다 (몇 분 걸릴 수 있음)...")
+        global _in_retrain
+        _in_retrain = True
         try:
             retrain_lstm()  # 이 안에서 last_lstm_train 메타를 저장함 (내부에서 짧게 connect)
         except Exception as e:
             log.exception(f"최초 LSTM 학습 중 에러 (LSTM 없이 조건식 전략만으로 계속 진행): {e}")
         finally:
+            _in_retrain = False
             _warned_missing_model.clear()  # 학습을 시도했으니 결손 상태가 바뀌었을 수 있어 경고 기록 초기화
 
     # 메모리 변수가 아니라 storage에 저장된 마지막 재학습 시각으로
@@ -708,6 +724,7 @@ def main():
             # run.log에서 가늠할 수 있도록 소요 시간을 기록한다.
             # (analysis_team 리포트 2026-11-16_1521_execution.md)
             _retrain_started = time.monotonic()
+            _in_retrain = True
             try:
                 # retrain_lstm()이 내부에서 "하나라도 학습 성공" 여부를 반환한다
                 # (analysis_team 리포트 2026-11-21_2118). 전부 실패했으면 이번
@@ -721,6 +738,7 @@ def main():
             except Exception as e:
                 log.exception(f"LSTM 재학습 중 에러: {e}")
             finally:
+                _in_retrain = False
                 log.info(f"LSTM 재학습 소요 시간: {time.monotonic() - _retrain_started:.1f}초 "
                           f"(이 구간 동안 매매 사이클은 멈춰 있었음)")
                 _warned_missing_model.clear()  # 재학습을 시도했으니 결손 상태가 바뀌었을 수 있어 경고 기록 초기화
