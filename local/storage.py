@@ -473,5 +473,43 @@ def prediction_accuracy(conn, coin: str | None = None, limit: int = 500) -> dict
 
 
 def prediction_accuracy_by_coin(conn, limit_per_coin: int = 500) -> list[dict]:
+    """코인별 적중률 요약(각 항목은 prediction_accuracy()와 동일한 형식:
+    coin/total/correct/accuracy).
+
+    이전에는 "SELECT DISTINCT coin"으로 코인 목록을 가져온 뒤 코인마다
+    prediction_accuracy()를 별도 호출(쿼리 1+N회)해서, 코인 수가 늘어나면
+    대시보드 새로고침마다 쿼리 수가 선형으로 늘어났다(analysis_team storage
+    리포트 2026-11-22_0018 발견점 #1, synthesizer Top3 #3). "코인별 최근
+    limit_per_coin건만 집계"하는 기존 제약은 SQLite 윈도우 함수(ROW_NUMBER,
+    3.25+에서 지원 — 이 프로젝트의 sqlite3 표준 라이브러리는 통상 훨씬 최신
+    버전을 포함)로 한 쿼리 안에서 그대로 재현해, 코인 수가 늘어나도 쿼리
+    횟수는 항상 2회(코인 목록 1회 + 집계 1회)로 고정된다. resolved=1 건이
+    전혀 없는 코인도 total=0, accuracy=None으로 결과에 포함되는 기존 동작을
+    그대로 유지한다."""
     coins = [r["coin"] for r in conn.execute("SELECT DISTINCT coin FROM predictions").fetchall()]
-    return [prediction_accuracy(conn, coin=c, limit=limit_per_coin) for c in coins]
+    if not coins:
+        return []
+    rows = conn.execute(
+        """
+        WITH ranked AS (
+            SELECT coin, correct,
+                   ROW_NUMBER() OVER (PARTITION BY coin ORDER BY predicted_at DESC) AS rn
+            FROM predictions
+            WHERE resolved = 1
+        )
+        SELECT coin, COUNT(*) AS total, SUM(correct) AS correct
+        FROM ranked
+        WHERE rn <= ?
+        GROUP BY coin
+        """,
+        (limit_per_coin,),
+    ).fetchall()
+    agg_by_coin = {r["coin"]: (r["total"], r["correct"] or 0) for r in rows}
+    out = []
+    for c in coins:
+        total, correct = agg_by_coin.get(c, (0, 0))
+        out.append({
+            "coin": c, "total": total, "correct": correct,
+            "accuracy": round(correct / total, 4) if total else None,
+        })
+    return out
