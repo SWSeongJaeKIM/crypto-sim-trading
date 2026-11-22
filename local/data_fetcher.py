@@ -508,7 +508,24 @@ def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=Non
             with print_lock:
                 _log_fetch_exception(f"[WARN] {coin} 히스토리 수집 실패 (캐시 확인)", coin, e)
             if cache_path.exists():
-                return coin, pd.read_csv(cache_path, parse_dates=["open_time"]), False
+                # 캐시 CSV 폴백 read 자체가 try/except 밖에 있어서, 캐시 파일이
+                # 손상되었거나 동시 쓰기 중이면 이 read마저 실패해 예외가
+                # ThreadPoolExecutor의 future.result()를 통해 그대로
+                # fetch_all_minute_history() 밖(결국 retrain_lstm() 호출부, 거기도
+                # try/except 없음)까지 전파됐다. "코인 1개"의 이중 실패(네트워크
+                # 실패 + 캐시도 손상)가 "이번 재학습 슬롯 전체(6코인 모두)"를
+                # 실패시키는, 이 파일이 다른 모든 곳에서 지키는 "코인 하나의
+                # 장애가 다른 코인을 막지 않는다" 원칙이 깨지는 유일한 경로였다
+                # (analysis_team execution 리포트 2026-11-22_1219 발견점 #1,
+                # synthesizer Top3 #1). 이 read도 자체적으로 감싸서, 실패하면
+                # 이 코인만 None으로 빠지고 나머지 코인은 영향받지 않는다.
+                try:
+                    return coin, pd.read_csv(cache_path, parse_dates=["open_time"]), False
+                except Exception as cache_e:
+                    with print_lock:
+                        log.warning(f"[{coin}] 캐시 CSV 폴백 read도 실패, 이 코인만 이번 "
+                                    f"슬롯 건너뜀 (다른 코인에는 영향 없음): {cache_e}")
+                    return coin, None, False
             return coin, None, False
 
     with ThreadPoolExecutor(max_workers=len(COINS)) as executor:
