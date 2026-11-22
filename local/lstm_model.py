@@ -427,7 +427,7 @@ class LSTMStrategy:
         # 임계값(0.5에서 threshold_distance만큼 떨어진 지점)부터 극단(0.5만큼
         # 떨어진 지점, 즉 prob_up=1.0 또는 0.0)까지를 0~1로 선형 스케일.
         distance_from_mid = abs(prob_up - 0.5)
-        threshold_distance = 0.5 - PROB_BUY_MIN  # = 0.05
+        threshold_distance = PROB_BUY_MIN - 0.5  # = 0.10 (PROB_BUY_MIN=0.60 기준)
         confidence = (distance_from_mid - threshold_distance) / (0.5 - threshold_distance)
         return sig, float(np.clip(confidence, 0.0, 1.0))
 
