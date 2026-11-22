@@ -413,6 +413,39 @@ def model_training_history(conn, coin: str | None = None, limit: int = 50) -> li
     return out
 
 
+def model_training_history_by_coins(conn, coins: list[str], limit_per_coin: int = 10) -> dict[str, list[dict]]:
+    """model_training_history(coin=c)를 코인마다 반복 호출하던 N+1 쿼리 패턴을
+    prediction_accuracy_by_coin()과 같은 윈도우 함수(ROW_NUMBER) 방식으로
+    1쿼리에 합친다 (analysis_team storage 리포트 2026-11-22_1418_storage.md
+    발견점 #1). dashboard.py가 쓰던 "코인별 최근 limit_per_coin건, 최신순"
+    결과를 코인별 리스트로 묶어 돌려준다 — 각 코인의 리스트 자체는 기존
+    model_training_history(coin=c, limit=limit_per_coin)의 반환값과 순서·
+    형식(feature_cols_json 파싱 포함)이 동일하다. coins에 들어있는 코인은
+    학습 기록이 전혀 없어도 빈 리스트로 키가 채워진다. coins가 비어있으면
+    쿼리 없이 빈 dict."""
+    if not coins:
+        return {}
+    placeholders = ",".join("?" for _ in coins)
+    rows = conn.execute(
+        f"""
+        WITH ranked AS (
+            SELECT *, ROW_NUMBER() OVER (PARTITION BY coin ORDER BY timestamp DESC) AS rn
+            FROM model_trainings
+            WHERE coin IN ({placeholders})
+        )
+        SELECT * FROM ranked WHERE rn <= ? ORDER BY coin, rn
+        """,
+        (*coins, limit_per_coin),
+    ).fetchall()
+    out: dict[str, list[dict]] = {c: [] for c in coins}
+    for r in rows:
+        d = dict(r)
+        d.pop("rn", None)
+        d["feature_cols"] = json.loads(d.pop("feature_cols_json"))
+        out[d["coin"]].append(d)
+    return out
+
+
 def add_prediction(conn, coin: str, predicted_at: str, prob_up: float, price_at_prediction: float) -> None:
     """LSTM이 이번 사이클에 낸 '다음 1분 상승확률' 예측 1건을 기록 (미확정 상태).
     다음 사이클에서 resolve_predictions()가 실제가를 채워 적중여부를 계산한다."""

@@ -891,10 +891,15 @@ def api_data():
 
         # 코인별 최근 10회, 화면엔 시간순(과거->최신)으로 묶어서 내려줘야
         # 프론트에서 "이전 대비 ▲▼" 추이 계산이 바로 된다.
+        # 예전엔 코인마다 model_training_history()를 따로 호출해 쿼리가
+        # 코인 수만큼 늘어났다 — prediction_accuracy_by_coin()과 동일한
+        # 윈도우 함수 쿼리로 1번에 가져온다 (analysis_team storage 리포트
+        # 2026-11-22_1418_storage.md 발견점 #1).
         trainings: list[dict] = []
-        for coin in ["BTC", "ETH", "XRP", "SOL", "DOGE", "ADA"]:
-            rows = storage.model_training_history(conn, coin=coin, limit=10)
-            trainings.extend(reversed(rows))  # 오래된 것 먼저
+        training_coins = ["BTC", "ETH", "XRP", "SOL", "DOGE", "ADA"]
+        trainings_by_coin = storage.model_training_history_by_coins(conn, training_coins, limit_per_coin=10)
+        for coin in training_coins:
+            trainings.extend(reversed(trainings_by_coin.get(coin, [])))  # 오래된 것 먼저
 
         prediction_accuracy = storage.prediction_accuracy_by_coin(conn)
         # 코인별 손절/강제청산 발생 횟수 — 변동성 큰 코인이 실제로 더 자주
