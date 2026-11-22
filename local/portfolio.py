@@ -54,6 +54,15 @@ LEVERAGE = 3.0           # 고정 레버리지 (추후 전략별로 다르게 �
 STOP_LOSS_PCT = 0.08     # 진입가 대비 이 비율(가격 기준)만큼 불리해지면 자동 청산 (롱/숏 동일)
 LIQUIDATION_PCT = 1.0 / LEVERAGE  # 마진이 0이 되는 이론적 가격 변동률 (3배 -> 약 33.3%)
 
+# 거래 수수료 (taker 기준 단순화). Upbit 스팟 KRW마켓 taker 수수료(약 0.05%)와
+# 바이낸스 USDT-M 선물 taker 수수료(약 0.04~0.05%)가 서로 비슷한 수준이라,
+# 롱/숏 구분 없이 하나의 비율로 단순화했다. 지금까지는 이 비용이 전혀
+# 반영되지 않아서, "누적" 포트폴리오처럼 리셋 없이 복리로 계속 쌓이는
+# 계좌에서는 수수료 없는 매매가 수백~수천 번 반복되며 실제로는 나올 수 없는
+# 수익률(예: 1만%대)이 코드상 그대로 가능했다. 정확한 금액은 아니지만,
+# "수수료가 전혀 없다"는 가장 비현실적인 가정은 없앤다.
+FEE_RATE = 0.0005  # 0.05%, 거래 1건(매수/매도/숏진입/숏청산)의 거래금액(notional) 기준
+
 
 @dataclass
 class Trade:
@@ -106,18 +115,21 @@ class Portfolio:
         spend = slot.cash_krw * pct_of_cash
         if spend <= 0 or slot.cash_krw <= 0:
             return False
+        fee = spend * FEE_RATE
         qty = spend / price_krw
         new_qty = slot.qty + qty
-        # 평균단가 갱신
+        # 평균단가 갱신 (수수료는 손절 기준선에는 영향 주지 않도록 cost basis에는 포함하지 않음)
         slot.avg_cost_krw = (
             (slot.avg_cost_krw * slot.qty + spend) / new_qty if new_qty > 0 else 0.0
         )
         slot.qty = new_qty
         slot.cash_krw -= spend
+        slot.cash_krw -= fee
         self.new_trades.append(Trade(
             timestamp=datetime.now(timezone.utc).isoformat(),
             coin=coin, side="BUY", price_krw=price_krw, qty=qty,
-            amount_krw=spend, cash_after=slot.cash_krw, reason=reason,
+            amount_krw=spend, cash_after=slot.cash_krw,
+            reason=f"{reason} [수수료 {fee:,.0f}원]",
         ))
         self.trade_count += 1
         self.updated_at = datetime.now(timezone.utc).isoformat()
@@ -130,15 +142,17 @@ class Portfolio:
         if qty_to_sell <= 0 or slot.qty <= 0:
             return False
         proceeds = qty_to_sell * price_krw
+        fee = proceeds * FEE_RATE
         slot.qty -= qty_to_sell
-        slot.cash_krw += proceeds
+        slot.cash_krw += proceeds - fee
         if slot.qty <= 1e-12:
             slot.qty = 0.0
             slot.avg_cost_krw = 0.0
         self.new_trades.append(Trade(
             timestamp=datetime.now(timezone.utc).isoformat(),
             coin=coin, side="SELL", price_krw=price_krw, qty=qty_to_sell,
-            amount_krw=proceeds, cash_after=slot.cash_krw, reason=reason,
+            amount_krw=proceeds, cash_after=slot.cash_krw,
+            reason=f"{reason} [수수료 {fee:,.0f}원]",
         ))
         self.trade_count += 1
         self.updated_at = datetime.now(timezone.utc).isoformat()
@@ -154,6 +168,7 @@ class Portfolio:
         if margin <= 0 or slot.cash_krw <= 0:
             return False
         notional = margin * LEVERAGE
+        fee = notional * FEE_RATE  # 선물 수수료는 마진이 아니라 포지션 전체(notional) 기준
         qty = notional / price_krw
         new_qty = slot.short_qty + qty
         # 평균 진입가 갱신 (추가 진입 시 가중평균)
@@ -164,11 +179,12 @@ class Portfolio:
         slot.short_qty = new_qty
         slot.short_margin_krw += margin
         slot.cash_krw -= margin
+        slot.cash_krw -= fee
         self.new_trades.append(Trade(
             timestamp=datetime.now(timezone.utc).isoformat(),
             coin=coin, side="SHORT_OPEN", price_krw=price_krw, qty=qty,
             amount_krw=margin, cash_after=slot.cash_krw,
-            reason=f"{reason} [레버리지 {LEVERAGE:.0f}배, 마진 {margin:,.0f}원]",
+            reason=f"{reason} [레버리지 {LEVERAGE:.0f}배, 마진 {margin:,.0f}원, 수수료 {fee:,.0f}원]",
         ))
         self.trade_count += 1
         self.updated_at = datetime.now(timezone.utc).isoformat()
@@ -185,12 +201,13 @@ class Portfolio:
             return False
         margin_released = slot.short_margin_krw * pct_of_qty
         pnl = (slot.short_avg_entry_krw - price_krw) * qty_to_close
-        returned = margin_released + pnl
-        # 레버리지 포지션이라 이론상 손실이 마진을 초과할 수 있다 — 격리마진
-        # 방식이므로 반환액이 0 밑으로 내려가지 않게(추가 손실을 현금에서
-        # 더 떼어가지 않게) 막는다. 정상적으로는 손절이 마진 전액 손실보다
-        # 훨씬 먼저 걸리므로(STOP_LOSS_PCT < LIQUIDATION_PCT) 이 경로는
-        # check_stop_loss_and_liquidation()이 손절을 놓쳤을 때만 닿는다.
+        fee = (qty_to_close * price_krw) * FEE_RATE  # 청산 시점 notional 기준 수수료
+        returned = margin_released + pnl - fee
+        # 레버리지 포지션이라 이론상 손실(+수수료)이 마진을 초과할 수 있다 —
+        # 격리마진 방식이므로 반환액이 0 밑으로 내려가지 않게(추가 손실을
+        # 현금에서 더 떼어가지 않게) 막는다. 정상적으로는 손절이 마진 전액
+        # 손실보다 훨씬 먼저 걸리므로(STOP_LOSS_PCT < LIQUIDATION_PCT) 이
+        # 경로는 check_stop_loss_and_liquidation()이 손절을 놓쳤을 때만 닿는다.
         returned = max(0.0, returned)
         slot.short_qty -= qty_to_close
         slot.short_margin_krw -= margin_released
@@ -203,7 +220,7 @@ class Portfolio:
             timestamp=datetime.now(timezone.utc).isoformat(),
             coin=coin, side=side_label, price_krw=price_krw, qty=qty_to_close,
             amount_krw=returned, cash_after=slot.cash_krw,
-            reason=f"{reason} [손익 {pnl:+,.0f}원]",
+            reason=f"{reason} [손익 {pnl:+,.0f}원, 수수료 {fee:,.0f}원]",
         ))
         self.trade_count += 1
         self.updated_at = datetime.now(timezone.utc).isoformat()
