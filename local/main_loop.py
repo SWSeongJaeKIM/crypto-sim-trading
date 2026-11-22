@@ -640,6 +640,13 @@ def main():
         # 바로 갱신돼 그 이후에는 "지금 당장 재학습이 필요한가"만 답할 뿐
         # "이번 반복에서 재학습을 했는가"를 알 수 없어 별도 플래그가 필요하다.
         _retrain_attempted_this_iteration = False
+        # 재학습과 마찬가지로, 하루 1회 prune(아래 "today_str" 블록)도 순수 DB
+        # 작업이지만 650행 근처의 _elapsed 측정 구간 안에서 실행되므로, 그날의
+        # 한 사이클만 "느려지는 조짐"처럼 보여 거짓 경고를 낼 수 있다. prune은
+        # 네트워크 호출이 없어 실제 드리프트(네트워크 지연 등) 신호를 가릴
+        # 위험은 낮다 (analysis_team execution 리포트 2026-11-22_0318, synthesizer
+        # Top3 #3).
+        _prune_attempted_this_iteration = False
         if retrain_is_due(last_retrain_at):
             _retrain_attempted_this_iteration = True
             # 재학습 동안 run_one_cycle()이 동기적으로 멈추는 공백 구간의 실제 길이를
@@ -668,6 +675,7 @@ def main():
             # 하루 1회만(날짜가 바뀐 첫 사이클에서) predictions 보관주기 정리를
             # 실행한다. 거래/손절 판단에 쓰는 로직은 전혀 건드리지 않고,
             # 이미 확정된(resolved=1) 오래된 예측 기록만 지운다.
+            _prune_attempted_this_iteration = True
             try:
                 with storage.connect() as conn:
                     n_pruned = storage.prune_predictions(conn, keep_days=PREDICTIONS_PRUNE_KEEP_DAYS)
@@ -714,7 +722,8 @@ def main():
         # execution 리포트 2026-11-22_0018, synthesizer Top3 #1). 재학습이 있었던
         # 사이클은 610행 근처에서 이미 소요시간을 별도로 로깅하므로 중복 경고를
         # 피하기 위해 여기서는 제외한다.
-        if not _retrain_attempted_this_iteration and _elapsed > CYCLE_ELAPSED_WARN_THRESHOLD_SEC:
+        if (not _retrain_attempted_this_iteration and not _prune_attempted_this_iteration
+                and _elapsed > CYCLE_ELAPSED_WARN_THRESHOLD_SEC):
             log.warning(f"사이클 처리에 {_elapsed:.1f}초 소요(60초 중) — "
                         f"{CYCLE_ELAPSED_WARN_THRESHOLD_SEC}초 임계치 초과, 60초 주기에 근접")
         _sleep_remaining = max(0.0, CYCLE_INTERVAL_SEC - _elapsed)
