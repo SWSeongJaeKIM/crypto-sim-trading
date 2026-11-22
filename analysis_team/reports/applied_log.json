@@ -1094,5 +1094,93 @@
     "decision": "skipped",
     "reason": "전부 진입/청산 신호를 발생시키는 임계값·조건을 바꾸는 매매 핵심 판단이며, 리포트 스스로 모든 제안에 대해 '노이즈·수수료 증가', '저유동성 구간 신호 누락', '설계 의도에서 벗어나 성과가 나빠질 가능성' 등 백테스트 없이는 순효과를 판단할 수 없는 트레이드오프를 명시함(판단 기준 5번). 2026-11-16 여러 회차에서 거의 동일한 제안들이 이미 같은 이유로 반복 보류된 바 있어 이번에도 동일하게 반영하지 않음.",
     "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0318",
+    "proposal": "fetch_latest_minute_candles()에 timeout/retries 파라미터를 추가하고 (기본 5초/2회), 매 사이클 호출되는 fetch_all_latest_candles() 경로에서 _http_get_json()의 기본값(10초/3회, 최대 약 33초)보다 짧게 적용",
+    "role": "execution",
+    "decision": "applied",
+    "reason": "단일 파일의 파라미터만 바꾸는 가장 낮은 난이도 작업이면서, 60초 매매 사이클 중 네트워크 수집 단계가 과도한 시간을 차지해 CYCLE_ELAPSED_WARN_THRESHOLD_SEC(30초) 경고를 유발하던 명백한 원인을 제거함. 매매 판단(진입/청산/임계값) 자체는 건드리지 않는 순수 인프라 개선이라 효과가 코드 리뷰만으로 검증 가능하고(판단 기준 1번), 스키마 변경이나 기존 데이터 변환이 필요 없어 위험이 낮음. fetch_minute_history (학습용, 하루 10회)는 그대로 둬 기존 동작에 영향 없음. mock으로 파라미터 전달을 확인함.",
+    "commit": "d81d811"
+  },
+  {
+    "timestamp": "2026-11-22_0318",
+    "proposal": "main_loop.py에 _prune_attempted_this_iteration 플래그를 추가해, _retrain_attempted_this_iteration과 동일하게 하루 1회 prune 작업도 CYCLE_ELAPSED_WARN_THRESHOLD_SEC 경고 조건에서 제외",
+    "role": "execution + storage (synthesizer Top3 #3)",
+    "decision": "applied",
+    "reason": "조사 결과 storage 리포트가 불명확하다고 지적한 'prune 함수들의 실제 호출 주체'는 main_loop.py 666~698행에서 이미 호출되고 있음을 확인함(하루 1회, 날짜가 바뀐 첫 사이클에서 prune_predictions/prune_snapshots/prune_model_trainings + WAL 체크포인트). 이 작업이 _elapsed 측정 구간 안에서 실행되는데도 재학습과 달리 경고 제외 대상이 아니었던 건 명백한 누락이고, prune은 네트워크 호출이 없는 순수 DB 작업이라 실제 드리프트 신호를 가릴 위험이 낮음(판단 기준 1번/2번 통과, 매매 판단과 무관). 조건 분기를 별도 스크립트로 시뮬레이션해 재학습/prune 단독 및 중복 상황 모두 의도대로 경고가 억제됨을 확인함.",
+    "commit": "e068f81"
+  },
+  {
+    "timestamp": "2026-11-22_0318",
+    "proposal": "손실 중 추가매수(물타기) 금지: portfolio.py buy()/apply_buy_signal()에 slot.qty > 0이고 현재가가 avg_cost_krw보다 낮으면 매수를 막는 분기 추가 (synthesizer Top3 #2, '손절선이 평균단가를 따라 내려가 손절이 지연되는' 구조적 문제에 대한 risk의 더 단순한 대안)",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "진입(매수) 조건 자체를 바꾸는 매매 핵심 판단 변경임(판단 기준 2번). 코드 로직상 '물타기가 손절을 지연시킬 수 있다'는 결함 존재 자체는 리뷰만으로 확인되지만, risk 리포트가 스스로 '실제 운영 중 어느 전략이 손실 중인지, 물타기 로직이 실전에서 얼마나 자주 발생했는지는 운영 데이터(거래내역/snapshot)를 봐야 판단 가능하며 코드만으로는 발생 가능성만 확인했다'고 명시함(판단 기준 5번 위배). 또한 매수를 막으면 정상적인 저가 매수(DCA) 기회도 함께 차단되는 트레이드오프가 있어, 순효과는 백테스트/실거래 손익 데이터로만 판단 가능함. 다음에 사람이 실제 운영 데이터를 보고 직접 판단.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0318",
+    "proposal": "STOP_LOSS_PCT(54행)를 단일 상수에서 코인별 딕셔너리로 바꿔 변동성이 큰 코인(DOGE/XRP 등)의 불필요한 조기 손절을 줄임",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "손절 임계값이라는 매매 핵심 판단을 코인별로 차등화하는 변경(판단 기준 2번). risk 리포트 스스로 '변동성 추정치(ATR 등) 자체가 또 하나의 파라미터가 되어 과최적화 여지가 생긴다'는 트레이드오프를 명시해 적절한 코인별 값은 백테스트/운영 데이터 없이는 정할 수 없음(판단 기준 5번). 2026-11-22_0221 회차에서도 유사한 코인별 베팅 비율 차등화 제안이 같은 이유로 보류된 바 있어 일관되게 반영하지 않음.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0318",
+    "proposal": "Portfolio에 peak_value_krw 필드와 drawdown_pct() 메서드를 추가해, main_loop.py 459~461행 snapshot 저장 시 최대 낙폭(drawdown)도 함께 기록",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "매매 판단을 바꾸는 제안은 아니라 그 자체는 저위험이지만, storage.py의 snapshots 테이블(CREATE TABLE IF NOT EXISTS만 있고 기존에 이미 생성된 테이블에 컬럼을 추가하는 ALTER TABLE 마이그레이션 경로가 없음)에 새 값을 기록하려면 스키마 변경이 필요해, 사용자의 기존 trading.db에 운영 중단없이 안전하게 적용하기 어려움(판단 기준 3번 제외 대상). 2026-11-22_0221 회차에서 거의 동일한 사유(코인별 비중 기록을 위한 snapshots 컬럼 추가)로 이미 보류된 바 있어 동일하게 반영하지 않음. 마이그레이션 방식은 사람이 직접 설계해야 함.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0318",
+    "proposal": "portfolios 테이블의 합성키(<strategy>__variant) 구조를 PRIMARY KEY(strategy, variant)로 바꾸는 스키마 마이그레이션 (기존 parse_portfolio_key로 분해 후 새 테이블에 INSERT, 기존 테이블은 old_portfolios로 rename)",
+    "role": "storage",
+    "decision": "skipped",
+    "reason": "리포트 스스로 'main_loop.py/dashboard.py 호출부도 함께 바꿔야 하는 다파일 작업'이자 '실제 운영 DB 백업 없이 적용하면 위험'이라고 명시한 스키마 마이그레이션임(판단 기준 3번 명시적 제외 대상: 운영 중단/기존 데이터 변환 필요). 사람이 백업/배포 순서를 직접 설계해야 함.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0318",
+    "proposal": "prune_snapshots()와 동일한 패턴으로 trades 테이블에도 prune_trades(keep_days=365) 함수를 추가해 일관성 확보",
+    "role": "storage",
+    "decision": "skipped",
+    "reason": "함수 추가 자체는 기존 prune_predictions/prune_snapshots와 동일한 패턴이라 구조적으로는 안전하지만, 리포트가 '우선순위 낮음'이라 명시했고 거래 기록을 영구 삭제하는 작업이라 신중을 기함. storage 리포트도 'trades에 prune을 추가하면 과거 전체 거래 기록이 필요해질 경우(장기 성과 재분석) 지워진 데이터를 못 보게 될 수 있다'는 트레이드오프를 명시해, keep_days 적정값과 실제 호출 주기를 사람이 먼저 정하는 것이 안전함(당장 급한 문제가 아니라는 리포트의 평가와도 일치).",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0318",
+    "proposal": "FINETUNE_CHAIN_RESET_THRESHOLD 상수를 추가해 finetune_chain_length가 임계값을 넘으면 다음 재학습을 finetune=False(전체 재학습)로 전환하는 정책 신호를 train_model() 반환값에 담음",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "모델 재학습 정책이라는 매매와 직결된 핵심 판단을 바꾸는 변경이며, 리포트 스스로 '임계값은 실제 운영 데이터로 튜닝 필요'하고 '리셋 직후 val_accuracy가 일시적으로 떨어질 수 있다'는 트레이드오프를 명시함(판단 기준 2번/5번 위배). 또한 lstm_model.py 단독으로는 정책 '신호'만 만들 수 있고 실제 적용은 main_loop.py의 retrain_lstm() 호출 로직과 함께 설계해야 하는 다파일 작업이라 이번 회차 범위를 벗어남.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0318",
+    "proposal": "build_features(df, market_df=None)처럼 시그니처를 확장해 BTC 1분 수익률을 외부 피처로 추가",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "입력 피처 차원이 바뀌어 기존에 저장된 각 코인의 .pt 모델 파일과 입력층 shape이 호환되지 않게 되므로, 사용자 PC가 git pull 후 재시작하면 model.load_state_dict()가 즉시 예외를 던져 전면 재학습이 강제됨(판단 기준 3번 위배와 유사한 호환성 파괴 위험). 2026-11-16, 2026-11-22_0221 등 여러 회차에서 동일한 BTC 상관 피처 제안이 같은 이유로 반복 보류됨. 예측 정확도 개선 효과도 실제 val_accuracy 데이터로만 검증 가능.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0318",
+    "proposal": "strategies.py의 1분봉 대비 '일봉 교과서 표준값' 전면 재조정 (rsi_period 14→7~9, bb_period 20→14, MACD (12,26,9)→(6,13,5), trend_follow buffer_pct 0.5%→0.15% 등), ma_cross_rsi/macd_momentum 기간 분리로 상관관계 완화, bollinger_rsi 급락 가드 추가, 거래량 필터 추가",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "전부 진입/청산 신호를 발생시키는 지표 기간·임계값을 바꾸는 매매 핵심 판단이며, 리포트 스스로 모든 항목에 대해 '거짓 신호(whipsaw) 증가로 수수료/슬리피지 부담 확대', '급락 후 반등 기회 일부 손실', '거래량 임계값은 실제 운영 데이터(거래량 분포)를 봐야 결정 가능하며 코드만으로는 판단할 수 없다' 등 백테스트/운영 데이터 없이는 순효과를 알 수 없는 트레이드오프를 명시함(판단 기준 5번). 2026-11-16 여러 회차에서 거의 동일한 제안들이 같은 이유로 이미 반복 보류된 바 있어 이번에도 동일하게 반영하지 않음.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0318",
+    "proposal": "(역할 간 긴장관계, synthesizer 기록) strategy의 지표 기간 단축(신호 빈도 증가 방향)과 risk/strategy의 물타기 금지·거래량 필터(신호/매매 빈도 감소 방향) 중 어느 쪽을 우선할지",
+    "role": "synthesizer",
+    "decision": "skipped",
+    "reason": "synthesizer는 risk의 물타기 금지 제안이 strategy의 기간 단축 제안보다 '지금 시점에서 더 바로 적용할 만한 근거를 갖췄다'고 평가했으나, 이는 검토 우선순위에 대한 상대적 평가일 뿐 둘 다 위에서 개별적으로 검토한 결과 코드 리뷰만으로는 반영 여부를 확정할 수 없는 매매 핵심 판단 변경임(판단 기준 2번/5번). 두 방향 모두 이번 회차에는 반영하지 않으므로 실제 충돌 선택은 발생하지 않음 — 다음에 사람이 실제 운영 데이터(거래 빈도, 승률, 수수료 부담)를 보고 어느 방향이 맞는지 직접 판단.",
+    "commit": null
   }
 ]
