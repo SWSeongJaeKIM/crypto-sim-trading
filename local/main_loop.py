@@ -228,13 +228,27 @@ def portfolio_key(strategy_name: str, mode: str) -> str:
     return storage.make_portfolio_key(strategy_name, mode)
 
 
-def load_or_new_portfolio(conn, strategy_name: str, mode: str = "cumulative") -> Portfolio:
+def load_or_new_portfolio(conn, strategy_name: str, mode: str = "cumulative",
+                           prices_krw: dict[str, float] | None = None) -> Portfolio:
     key = portfolio_key(strategy_name, mode)
     doc = storage.get_portfolio(conn, key)
     if doc:
         pf = Portfolio.from_doc(doc)
         if mode == "reset" and _reset_is_due(pf.created_at):
-            log.info(f"[{key}] {RESET_DAYS}일 경과 — 포트폴리오 초기화")
+            # 리셋 직전 보유 중이던 포지션(현금/코인 보유량/숏 포지션)이 거래
+            # 기록 없이 그대로 사라져서, trades 로그만 보면 "왜 보유량이 갑자기
+            # 0이 되고 현금이 1000만원이 됐는지" 사후 추적이 안 됐다
+            # (analysis_team risk 리포트 2026-11-22_1219 발견점 #3). 리셋 자체
+            # (단기 성과 재측정이라는 설계 의도)는 그대로 두고, 리셋 직전
+            # 평가금액만 로그로 남겨 추적성을 높인다. prices_krw가 없으면
+            # (방어적 — 호출부는 항상 넘기지만) 평가금액 없이 기존과 동일하게
+            # 로그만 남긴다.
+            if prices_krw:
+                total_value = pf.total_value_krw(prices_krw)
+                log.info(f"[{key}] {RESET_DAYS}일 경과 — 포트폴리오 초기화 "
+                         f"(리셋 직전 평가금액 {total_value:,.0f}원)")
+            else:
+                log.info(f"[{key}] {RESET_DAYS}일 경과 — 포트폴리오 초기화")
             return Portfolio.new(key, coins=COINS, initial_capital_krw=INITIAL_CAPITAL_KRW)
         return pf
     return Portfolio.new(key, coins=COINS, initial_capital_krw=INITIAL_CAPITAL_KRW)
@@ -429,7 +443,7 @@ def run_one_cycle(conn) -> None:
             # 상태만 분리). 확신도(0~1)는 베팅 비율(MIN~MAX_TRADE_FRACTION)로
             # 변환되어 "얼마나 베팅할지"를 결정한다 — 애매한 신호는 조금만,
             # 뚜렷한 신호는 많이 움직인다.
-            portfolios = {mode: load_or_new_portfolio(conn, strat_name, mode) for mode in PORTFOLIO_MODES}
+            portfolios = {mode: load_or_new_portfolio(conn, strat_name, mode, prices_krw) for mode in PORTFOLIO_MODES}
             signals: dict[str, tuple[str, float]] = {}  # coin -> (signal, confidence)
 
             for coin, df in candles.items():
