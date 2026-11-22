@@ -324,7 +324,15 @@ def fetch_minute_history(market: str, days: int = 14, sleep_sec: float = 0.12,
         new_to_param = oldest["candle_date_time_utc"]
 
         if on_page:
-            on_page(page_idx, oldest_time, len(all_rows))
+            try:
+                on_page(page_idx, oldest_time, len(all_rows))
+            except Exception as e:
+                # on_page 콜백(결국 main_loop.set_progress 등) 예외가 여기서
+                # 그대로 전파되면 호출부의 넓은 except(아래 FetchError 처리)까지
+                # 번져 "네트워크 수집 실패"로 오분류되고, 이미 모은 페이지가
+                # 버려진 채 캐시로 대체돼버린다 (analysis_team 2026-11-22_1922_execution.md).
+                # 진행률 로깅은 부가 기능이므로 경고만 남기고 수집은 계속한다.
+                log.warning(f"on_page 콜백 실패(무시하고 수집 계속): {e}")
 
         # 진행이 전혀 안 되는 경우(같은 to 파라미터 반복) 감지 — 멈춘 것처럼
         # 보이는 무한 루프를 조기에 끊어낸다. 1~2회는 API 쪽의 일시적 중복
@@ -505,7 +513,14 @@ def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=Non
                     log.info(f"[{_coin}] 페이지 {page_idx}/~{expected_pages} 수집 중... "
                              f"(누적 {rows_so_far}개, 가장 오래된 시점 {oldest_time})")
                     if on_progress:
-                        on_progress(_coin, _i, len(COINS))
+                        # 484행의 바깥쪽 on_progress 호출과 동일하게 보호한다 —
+                        # 이 호출만 try/except가 없어 콜백 예외가 fetch_minute_history
+                        # 쪽 on_page 호출(이제는 그쪽도 보호됨)을 거쳐 더 위로 전파될
+                        # 수 있었다 (analysis_team 2026-11-22_1922_execution.md).
+                        try:
+                            on_progress(_coin, _i, len(COINS))
+                        except Exception as e:
+                            log.warning(f"[{_coin}] on_progress 콜백 실패(무시하고 계속 진행): {e}")
 
         cache_path = DATA_DIR / f"{coin}_1m_{days}d.csv"
         force_full = last_full_refresh.get(coin) != today_str

@@ -229,15 +229,25 @@ def set_progress(stage: str, detail: str = "", **extra) -> None:
     만약 바깥에서 전달받은 긴 커넥션에 썼다면 그 작업 전체 시간 동안 DB
     쓰기 잠금을 들고 있게 되어 동시에 도는 다른 프로세스(main_loop 사이클,
     dashboard, retrain_now.py 등)가 "database is locked"를 만난다. 매번
-    새로 열고 즉시 commit+close하면 그 순간만 짧게 잠겼다가 바로 풀린다."""
+    새로 열고 즉시 commit+close하면 그 순간만 짧게 잠겼다가 바로 풀린다.
+
+    주의: 이 함수는 "진단/부가 기능"이라 매매 사이클을 막아서는 안 된다.
+    storage.connect()/set_meta()가 예외를 던지면(예: 일시적 DB 잠금) 그
+    예외가 run_one_cycle() 맨 앞(캔들 수집·전략 루프 시작 전)에서 그대로
+    전파되어 그 사이클(1분) 전체가 통째로 스킵되는 문제가 있었다
+    (analysis_team 2026-11-22_1922_execution.md). _touch_heartbeat()가
+    OSError를 자체적으로 삼키는 것과 동일한 원칙을 여기에도 적용한다."""
     _touch_heartbeat()
-    with storage.connect() as conn:
-        storage.set_meta(conn, "progress", {
-            "stage": stage,
-            "detail": detail,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            **extra,
-        })
+    try:
+        with storage.connect() as conn:
+            storage.set_meta(conn, "progress", {
+                "stage": stage,
+                "detail": detail,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                **extra,
+            })
+    except Exception:
+        log.warning("set_progress(%r) 저장 실패 — 매매 사이클은 계속 진행", stage, exc_info=True)
 
 
 def portfolio_key(strategy_name: str, mode: str) -> str:
