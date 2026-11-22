@@ -703,7 +703,7 @@ def prediction_accuracy_by_coin(conn, limit_per_coin: int = 500, lookback_days: 
     return out
 
 
-def stop_loss_counts_by_coin(conn) -> list[dict]:
+def stop_loss_counts_by_coin(conn, lookback_days: int = 90) -> list[dict]:
     """코인별 손절/강제청산 발생 횟수 집계 (기록용 — 트레이딩 로직은 전혀
     건드리지 않는 순수 조회).
 
@@ -720,7 +720,19 @@ def stop_loss_counts_by_coin(conn) -> list[dict]:
     코인(예: DOGE)이 실제로 다른 코인보다 몇 배 더 자주 손절에 걸리는가"를
     먼저 데이터로 쌓아두기 위한 것이다 — 손절선/배분 자체를 바꾸는 건 실제
     운영 데이터를 봐야 판단 가능하다는 전제가 깔려 있다 (analysis_team risk
-    리포트 2026-11-22_0517 구체적 제안 #2, synthesizer Top3 #3)."""
+    리포트 2026-11-22_0517 구체적 제안 #2, synthesizer Top3 #3).
+
+    trades는 predictions/snapshots/model_trainings/slot_values와 달리
+    prune 대상이 아니라 실제 매매가 있었다는 1차 원장이라 계속 쌓이는데,
+    이 함수와 simultaneous_stop_events()는 이 테이블 전체를 시간 하한 없이
+    GROUP BY해 dashboard.py에서 15초마다 재조회한다 — 운영 기간이 길어질수록
+    폴링 비용이 서서히 커지는 구조였다. trades 자체를 지우지는 않고(1차
+    원장이라 삭제는 위험), prediction_accuracy_by_coin(lookback_days=14)와
+    동일한 패턴으로 조회 측에만 lookback_days 하한을 추가한다 — "최근 패턴
+    확인용" 참고 지표라 기본값은 더 넉넉하게 90일로 잡아 오래된 사례가 기본
+    조회에서 너무 쉽게 빠지지 않게 한다 (analysis_team storage 리포트
+    2026-11-22_2318 발견점 #1, 구체적 제안, synthesizer Top3 #3)."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
     rows = conn.execute(
         """
         SELECT coin,
@@ -728,10 +740,11 @@ def stop_loss_counts_by_coin(conn) -> list[dict]:
                SUM(CASE WHEN reason LIKE '강제청산%' THEN 1 ELSE 0 END) AS liquidation_count,
                COUNT(*) AS total_count
         FROM trades
-        WHERE reason LIKE '손절%' OR reason LIKE '강제청산%'
+        WHERE (reason LIKE '손절%' OR reason LIKE '강제청산%') AND timestamp >= ?
         GROUP BY coin
         ORDER BY total_count DESC
-        """
+        """,
+        (cutoff,),
     ).fetchall()
     return [
         {
@@ -744,7 +757,7 @@ def stop_loss_counts_by_coin(conn) -> list[dict]:
     ]
 
 
-def simultaneous_stop_events(conn) -> list[dict]:
+def simultaneous_stop_events(conn, lookback_days: int = 90) -> list[dict]:
     """같은 전략에서 같은 분(1분)에 2개 이상 코인이 동시에 손절/강제청산된
     사례 집계 (기록용 — 트레이딩 로직은 전혀 건드리지 않는 순수 조회).
 
@@ -762,18 +775,25 @@ def simultaneous_stop_events(conn) -> list[dict]:
     (참고용 지표, 정밀 신호 아님). timestamp는 ISO8601 문자열
     (YYYY-MM-DDTHH:MM:SS...)이라 앞 16자(분까지)만 잘라도 사전식 순서와
     시간 순서가 일치한다(prune_predictions() 등이 이미 쓰는 문자열 비교
-    방식과 동일)."""
+    방식과 동일).
+
+    stop_loss_counts_by_coin()과 같은 이유로, trades 전체를 시간 하한 없이
+    GROUP BY하는 15초 폴링 비용 문제도 동일하게 적용된다 — 같은 lookback_days
+    패턴을 그대로 적용한다 (analysis_team storage 리포트 2026-11-22_2318
+    발견점 #1, 구체적 제안, synthesizer Top3 #3)."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
     rows = conn.execute(
         """
         SELECT strategy, substr(timestamp, 1, 16) AS minute,
                COUNT(DISTINCT coin) AS coin_count,
                GROUP_CONCAT(DISTINCT coin) AS coins
         FROM trades
-        WHERE reason LIKE '손절%' OR reason LIKE '강제청산%'
+        WHERE (reason LIKE '손절%' OR reason LIKE '강제청산%') AND timestamp >= ?
         GROUP BY strategy, minute
         HAVING COUNT(DISTINCT coin) >= 2
         ORDER BY minute DESC
-        """
+        """,
+        (cutoff,),
     ).fetchall()
     return [
         {
