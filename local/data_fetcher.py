@@ -225,10 +225,22 @@ def fetch_latest_minute_candles(market: str, count: int = 200,
 def fetch_minute_history(market: str, days: int = 14, sleep_sec: float = 0.12,
                           max_pages: int | None = None, on_page=None,
                           rate_limiter: "_RateLimiter | None" = None,
-                          min_time: "pd.Timestamp | None" = None) -> pd.DataFrame:
+                          min_time: "pd.Timestamp | None" = None) -> tuple[pd.DataFrame, bool]:
     """최근 `days`일치 1분봉 전체를 페이지네이션으로 수집 (LSTM 학습용).
     Upbit은 페이지당 최대 200개(=200분)만 주므로, days=14면 약 14*1440/200≈101회 호출.
     `to` 파라미터로 과거 방향 페이지네이션.
+
+    반환값은 (df, is_partial) 튜플이다. is_partial=True는 페이지 실패(80% 이상
+    모은 뒤 포기) 또는 max_pages 도달로 목표(`days`일치) 전체를 다 모으지
+    못하고 중간에 멈췄다는 뜻이다 — 호출부(fetch_all_minute_history의
+    _fetch_one)가 이 경우 "오늘 전체 재수집 완료" 마커(last_full_refresh)를
+    기록하지 않도록 구분하는 용도다. 이전에는 이 둘을 구분할 방법이 없어서,
+    부분 성공도 완료와 동일하게 마커에 기록되어 그 코인이 당일 남은 재학습
+    슬롯 동안 계속 증분 수집만 하며 학습 데이터 창이 줄어든 채 유지되는
+    문제가 있었다 (analysis_team execution 리포트 2026-11-22_1418.md 발견점
+    #1). all_rows가 비어 완전히 빈 DataFrame을 반환하는 경우(거래소에 더 받을
+    데이터가 없는 정상 상황)는 is_partial=False다 — "부분 수집"이 아니라
+    "받을 게 없어서 끝"이기 때문이다.
 
     min_time: 주어지면(이미 캐시에 min_time까지의 데이터가 있는 경우), 기존
     `cutoff`(now - days) 대신 "min_time과 cutoff 중 더 최근 시점"을 조기 중단
@@ -272,6 +284,7 @@ def fetch_minute_history(market: str, days: int = 14, sleep_sec: float = 0.12,
     to_param = ""
     prev_to_param = None
     stuck_count = 0
+    is_partial = False
 
     for page_idx in range(1, max_pages + 1):
         if rate_limiter is not None:
@@ -293,6 +306,7 @@ def fetch_minute_history(market: str, days: int = 14, sleep_sec: float = 0.12,
                     f"이미 {page_idx - 1}페이지(목표 ~{_expected_pages:.0f}페이지의 "
                     f"{(page_idx - 1) / _expected_pages:.0%}) 모았으므로 부분 데이터로 반환합니다."
                 )
+                is_partial = True
                 break
             raise
         if not raw:
@@ -332,12 +346,16 @@ def fetch_minute_history(market: str, days: int = 14, sleep_sec: float = 0.12,
         # 위와 동일한 이유로 log.warning 사용 (run.log에 남기기 위함).
         log.warning(f"{market} 수집이 max_pages({max_pages})에 도달해 중단됨 "
                     f"(목표 {days}일 중 일부만 수집됐을 수 있음)")
+        is_partial = True
 
     if not all_rows:
-        return pd.DataFrame(columns=["open_time", "open", "high", "low", "close", "volume"])
+        # 받을 데이터가 전혀 없었던(거래소 쪽에 더 없는) 정상 상황이라 부분
+        # 수집으로 취급하지 않는다 — 위 두 분기(페이지 실패/max_pages 도달)와는
+        # 다르게 "목표를 못 채우고 멈춘" 게 아니라 "처음부터 받을 게 없었던" 경우.
+        return pd.DataFrame(columns=["open_time", "open", "high", "low", "close", "volume"]), False
 
     df = _parse_minute_df(all_rows)
-    return df[df["open_time"] >= effective_cutoff].reset_index(drop=True)
+    return df[df["open_time"] >= effective_cutoff].reset_index(drop=True), is_partial
 
 
 def fetch_all_latest_candles(count: int = 200) -> dict[str, pd.DataFrame]:
@@ -492,8 +510,8 @@ def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=Non
                 min_time = None
 
         try:
-            df = fetch_minute_history(UPBIT_MARKETS[coin], days=days, on_page=_on_page,
-                                       rate_limiter=history_rate_limiter, min_time=min_time)
+            df, is_partial = fetch_minute_history(UPBIT_MARKETS[coin], days=days, on_page=_on_page,
+                                                   rate_limiter=history_rate_limiter, min_time=min_time)
             if cached_df is not None and len(cached_df):
                 # 증분으로 받은 새 데이터(df, 비어 있을 수도 있음)를 캐시와
                 # 합치고 중복(겹치는 경계 시점)을 제거한 뒤 90일(=days) cutoff를
@@ -510,9 +528,21 @@ def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=Non
                 if min_time is not None:
                     log.info(f"[{coin}] 증분 수집 완료 (누적 {len(df)}개, "
                              f"캐시 마지막 시점 {min_time} 이후분만 신규 요청)")
+                elif is_partial:
+                    # 부분 성공(80% 이상 모은 뒤 페이지 실패, 또는 max_pages 도달)을
+                    # "완료"와 구분해서 남긴다 — 이 경우 아래에서 force_full 마커를
+                    # 기록하지 않아, 다음 재학습 슬롯에서 전체 재수집을 다시
+                    # 시도한다 (analysis_team execution 리포트
+                    # 2026-11-22_1418_execution.md 발견점 #1, 구체적 제안 #1).
+                    log.warning(f"[{coin}] {len(df)}개 1분봉 부분 재수집 (목표 {days}일 중 "
+                                f"일부만 수집됨) — 완료로 기록하지 않고 다음 슬롯에서 재시도")
                 else:
                     log.info(f"[{coin}] {len(df)}개 1분봉 전체 재수집 완료")
-            return coin, df, force_full
+            # force_full(=이번에 전체 재수집을 "시도"했는지)와 별개로, 그 시도가
+            # 부분 성공(is_partial)이었으면 "오늘 완료" 마커를 기록하지 않는다 —
+            # 그래야 다음 재학습 슬롯에서도 같은 날 전체 재수집을 다시 시도해,
+            # 학습 데이터 창이 줄어든 채로 당일 나머지 슬롯 동안 고착되지 않는다.
+            return coin, df, (force_full and not is_partial)
         except Exception as e:
             # 위 _fetch_one과 같은 이유로 FetchError만이 아니라 모든 예외를 잡는다.
             # 캐시 폴백 분기는 기존과 동일하게 그대로 탄다. 반복되는 실패는
@@ -546,6 +576,9 @@ def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=Non
             for i, coin in enumerate(COINS, start=1)
         }
         for future in as_completed(futures):
+            # used_force_full == True는 "이번에 전체 재수집을 시도했고, 그 결과가
+            # 부분 성공이 아니었다"(_fetch_one의 `force_full and not is_partial`)
+            # 는 뜻이다. 부분 성공은 여기서 False로 들어와 마커를 남기지 않는다.
             coin, df, used_force_full = future.result()
             if df is not None:
                 result[coin] = df
