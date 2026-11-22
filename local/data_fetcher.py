@@ -194,10 +194,20 @@ def fetch_latest_minute_candles(market: str, count: int = 200,
 
 def fetch_minute_history(market: str, days: int = 14, sleep_sec: float = 0.12,
                           max_pages: int | None = None, on_page=None,
-                          rate_limiter: "_RateLimiter | None" = None) -> pd.DataFrame:
+                          rate_limiter: "_RateLimiter | None" = None,
+                          min_time: "pd.Timestamp | None" = None) -> pd.DataFrame:
     """최근 `days`일치 1분봉 전체를 페이지네이션으로 수집 (LSTM 학습용).
     Upbit은 페이지당 최대 200개(=200분)만 주므로, days=14면 약 14*1440/200≈101회 호출.
     `to` 파라미터로 과거 방향 페이지네이션.
+
+    min_time: 주어지면(이미 캐시에 min_time까지의 데이터가 있는 경우), 기존
+    `cutoff`(now - days) 대신 "min_time과 cutoff 중 더 최근 시점"을 조기 중단
+    기준으로 써서 캐시에 없는 새 데이터만 받아온다. 재학습마다 `days`일치
+    전체를 매번 통째로 재수집해 API 호출이 과도하게 누적되는 문제
+    (analysis_team execution 리포트 2026-11-22_0918 발견점 #1, synthesizer
+    Top3 #1)를 줄이기 위한 증분 수집용 — fetch_all_minute_history()가 캐시의
+    마지막 시점을 넘겨준다. None(기본값)이면 기존과 완전히 동일하게 동작
+    (단독 호출/테스트 동작 그대로 유지).
 
     max_pages 기본값은 None이면 필요 페이지 수(days*1440/200)에 20% 여유를 더해
     자동 계산한다 (예: 30일 -> 216 * 1.2 ≈ 259). 이렇게 상한을 현실적으로 두는 이유:
@@ -216,6 +226,9 @@ def fetch_minute_history(market: str, days: int = 14, sleep_sec: float = 0.12,
     예전과 동일하게 sleep_sec만으로 이 호출 단독의 페이싱을 한다 — 단독
     호출(예: 테스트, 일회성 스크립트)의 동작은 그대로 유지된다."""
     cutoff = pd.Timestamp.now() - pd.Timedelta(days=days)
+    # min_time이 cutoff보다 더 최근이면(=캐시가 이미 그 시점까지 있으면) 그
+    # 시점에서 조기 중단해, 캐시에 이미 있는 과거 페이지들은 다시 받지 않는다.
+    effective_cutoff = cutoff if min_time is None or min_time <= cutoff else min_time
     if max_pages is None:
         max_pages = int(days * 1440 / 200 * 1.2) + 5
     # 목표 페이지 수(마진 20% 포함 전) 대비 80% 이상을 이미 모은 상태에서
@@ -281,7 +294,7 @@ def fetch_minute_history(market: str, days: int = 14, sleep_sec: float = 0.12,
         prev_to_param = new_to_param
         to_param = new_to_param
 
-        if oldest_time <= cutoff or len(raw) < 200:
+        if oldest_time <= effective_cutoff or len(raw) < 200:
             break
         if rate_limiter is None:
             time.sleep(sleep_sec)
@@ -294,7 +307,7 @@ def fetch_minute_history(market: str, days: int = 14, sleep_sec: float = 0.12,
         return pd.DataFrame(columns=["open_time", "open", "high", "low", "close", "volume"])
 
     df = _parse_minute_df(all_rows)
-    return df[df["open_time"] >= cutoff].reset_index(drop=True)
+    return df[df["open_time"] >= effective_cutoff].reset_index(drop=True)
 
 
 def fetch_all_latest_candles(count: int = 200) -> dict[str, pd.DataFrame]:
@@ -339,6 +352,42 @@ def fetch_all_latest_candles(count: int = 200) -> dict[str, pd.DataFrame]:
     return result
 
 
+# 재학습(main_loop.py 기준 하루 10회)마다 fetch_all_minute_history가 매번
+# HISTORY_DAYS_FOR_TRAIN(90)일치 전체를 통째로 재수집해, 직전 슬롯과 거의
+# 겹치는 데이터까지 코인당 약 648페이지 × 6코인 ≈ 3,900회의 Upbit 호출이
+# 2시간24분마다 반복되는 문제가 있었다 (analysis_team execution 리포트
+# 2026-11-22_0918 발견점 #1, synthesizer Top3 #1). 아래 두 전역은 "하루에 한
+# 번은 전체 재수집하되, 그 사이에는 캐시의 마지막 시점 이후분만 받는다"는
+# 안전장치를 구현하기 위한 상태다 — 증분 수집만 계속하면 Upbit이 과거
+# 데이터를 드물게 사후 정정하는 경우를 영영 반영하지 못할 수 있어(execution
+# 리포트 자체가 지적한 트레이드오프), 날짜가 바뀌면(로컬 날짜 기준) 코인별로
+# 1회씩 강제로 전체 재수집하도록 한다.
+_FULL_REFRESH_MARKER_PATH = DATA_DIR / "last_full_refresh.json"
+
+
+def _load_last_full_refresh() -> dict[str, str]:
+    if not _FULL_REFRESH_MARKER_PATH.exists():
+        return {}
+    try:
+        return json.loads(_FULL_REFRESH_MARKER_PATH.read_text())
+    except Exception as e:
+        # 마커 파일이 없거나 손상된 경우 "오늘 아직 전체 재수집 안 함"으로
+        # 취급 — 이번 회차는 전체 코인이 전체 재수집으로 폴백되어 조금
+        # 느려지지만(기존 동작과 동일한 비용), 데이터가 틀리게 섞이는 일은 없다.
+        log.warning(f"last_full_refresh.json 읽기 실패, 이번 회차는 전체 재수집으로 폴백: {e}")
+        return {}
+
+
+def _save_last_full_refresh(marker: dict[str, str]) -> None:
+    try:
+        _FULL_REFRESH_MARKER_PATH.write_text(json.dumps(marker, ensure_ascii=False))
+    except Exception as e:
+        # 쓰기 실패해도 다음 재학습 때 다시 "오늘 전체 재수집 안 함"으로 보고
+        # 재시도하므로 치명적이지 않다 — 그냥 그 다음 회차도 전체 재수집이
+        # 될 뿐 (에러 전파 X).
+        log.warning(f"last_full_refresh.json 쓰기 실패 (다음 회차에 재시도): {e}")
+
+
 def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=None) -> dict[str, pd.DataFrame]:
     """6대 코인의 최근 N일 1분봉 전체 (LSTM 학습/재학습 시 호출). 디스크 캐시 지원.
 
@@ -352,6 +401,11 @@ def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=Non
     돼 있었지만 실제 동작은 그렇지 않았다). 공유 리미터로 이제는 스레드 수와
     무관하게 전체 요청 속도가 순차 실행과 같게 유지된다.
 
+    캐시 CSV가 있고 오늘 그 코인을 아직 전체 재수집하지 않았다면, 캐시의
+    마지막 open_time 이후분만 받아서 병합한다(증분 수집, 위 모듈 docstring
+    참고). 코인별로 로컬 날짜가 바뀐 뒤 처음 호출될 때는(또는 캐시/마커가
+    없거나 읽기 실패하면) 안전하게 전체 재수집으로 폴백한다.
+
     on_progress(coin, index, total): 코인 하나 수집이 시작/진행될 때마다
     호출 (대시보드 진행표시 + 워치독 하트비트용). 여러 스레드에서 동시에
     호출될 수 있으므로 호출 자체를 락으로 감싼다 — set_progress가 매번
@@ -364,7 +418,14 @@ def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=Non
     # 스레드 수와 무관하게 "코인 1개 기준" 간격(0.12초)으로 제한한다.
     history_rate_limiter = _RateLimiter(min_interval_sec=0.12)
 
-    def _fetch_one(coin: str, i: int) -> tuple[str, pd.DataFrame | None]:
+    # 마커는 스레드 풀 시작 "전"에 한 번만 읽고, 끝난 "후"에 한 번만 쓴다 —
+    # 6개 스레드가 각자 파일을 읽고/쓰면 경합(동시 읽기-수정-쓰기로 서로의
+    # 갱신을 덮어씀)이 생길 수 있으므로, 읽기/쓰기 자체를 스레드 풀 바깥에서
+    # 직렬화해 완전히 피한다.
+    today_str = str(pd.Timestamp.now().date())
+    last_full_refresh = _load_last_full_refresh()
+
+    def _fetch_one(coin: str, i: int) -> tuple[str, pd.DataFrame | None, bool]:
         if on_progress:
             with print_lock:
                 on_progress(coin, i, len(COINS))
@@ -382,14 +443,46 @@ def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=Non
                         on_progress(_coin, _i, len(COINS))
 
         cache_path = DATA_DIR / f"{coin}_1m_{days}d.csv"
+        force_full = last_full_refresh.get(coin) != today_str
+        cached_df: pd.DataFrame | None = None
+        min_time = None
+        if not force_full and cache and cache_path.exists():
+            try:
+                cached_df = pd.read_csv(cache_path, parse_dates=["open_time"])
+                if len(cached_df):
+                    min_time = cached_df["open_time"].max()
+                else:
+                    cached_df = None
+            except Exception as e:
+                # 캐시 CSV가 손상됐으면 증분 대신 안전하게 전체 재수집으로
+                # 폴백한다 (오래된/깨진 캐시가 그대로 섞여 들어가는 것을 방지).
+                with print_lock:
+                    log.warning(f"[{coin}] 캐시 CSV 읽기 실패, 이번 회차는 전체 재수집으로 폴백: {e}")
+                cached_df = None
+                min_time = None
+
         try:
             df = fetch_minute_history(UPBIT_MARKETS[coin], days=days, on_page=_on_page,
-                                       rate_limiter=history_rate_limiter)
+                                       rate_limiter=history_rate_limiter, min_time=min_time)
+            if cached_df is not None and len(cached_df):
+                # 증분으로 받은 새 데이터(df, 비어 있을 수도 있음)를 캐시와
+                # 합치고 중복(겹치는 경계 시점)을 제거한 뒤 90일(=days) cutoff를
+                # 다시 적용한다 — "새 데이터만 쌓여서 캐시가 무한정 길어지는"
+                # 일이 없도록 매번 재수집과 동일한 보관 범위를 유지한다.
+                merged = pd.concat([cached_df, df], ignore_index=True) if len(df) else cached_df
+                merged = merged.drop_duplicates(subset="open_time", keep="last").sort_values(
+                    "open_time").reset_index(drop=True)
+                cutoff = pd.Timestamp.now() - pd.Timedelta(days=days)
+                df = merged[merged["open_time"] >= cutoff].reset_index(drop=True)
             if cache and len(df):
                 df.to_csv(cache_path, index=False)
             with print_lock:
-                log.info(f"[{coin}] {len(df)}개 1분봉 수집 완료")
-            return coin, df
+                if min_time is not None:
+                    log.info(f"[{coin}] 증분 수집 완료 (누적 {len(df)}개, "
+                             f"캐시 마지막 시점 {min_time} 이후분만 신규 요청)")
+                else:
+                    log.info(f"[{coin}] {len(df)}개 1분봉 전체 재수집 완료")
+            return coin, df, force_full
         except Exception as e:
             # 위 _fetch_one과 같은 이유로 FetchError만이 아니라 모든 예외를 잡는다.
             # 캐시 폴백 분기는 기존과 동일하게 그대로 탄다. 반복되는 실패는
@@ -397,8 +490,8 @@ def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=Non
             with print_lock:
                 _log_fetch_exception(f"[WARN] {coin} 히스토리 수집 실패 (캐시 확인)", coin, e)
             if cache_path.exists():
-                return coin, pd.read_csv(cache_path, parse_dates=["open_time"])
-            return coin, None
+                return coin, pd.read_csv(cache_path, parse_dates=["open_time"]), False
+            return coin, None, False
 
     with ThreadPoolExecutor(max_workers=len(COINS)) as executor:
         futures = {
@@ -406,9 +499,14 @@ def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=Non
             for i, coin in enumerate(COINS, start=1)
         }
         for future in as_completed(futures):
-            coin, df = future.result()
+            coin, df, used_force_full = future.result()
             if df is not None:
                 result[coin] = df
+                if used_force_full:
+                    last_full_refresh[coin] = today_str
+
+    # 스레드 풀이 모두 끝난 뒤 한 번만 기록 (위 설명대로 경합 방지).
+    _save_last_full_refresh(last_full_refresh)
 
     # dict 삽입 순서가 코인 순서와 안 맞을 수 있으니(완료되는 대로 들어옴),
     # 이후 코드가 COINS 순서를 가정하지 않도록 COINS 순서로 재정렬해서 반환.
