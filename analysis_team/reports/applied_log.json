@@ -1622,5 +1622,93 @@
     "decision": "skipped",
     "reason": "리포트 자체가 '지금 당장 prune_trades를 추가하라고 권하지는 않음'이라고 명시하고, trades 삭제/아카이브는 과거 손익/손절 통계를 복원 불가능하게 만들 위험이 있어 실제 증가 속도(운영 DB)를 봐야 판단 가능하다고 결론. 이번 회차에서는 조치하지 않음.",
     "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0818",
+    "proposal": "main_loop.py 726번째 줄(_retrain_started 기록 직전)에 'LSTM 재학습 시작 — 손절/강제청산 체크 일시 중단' 로그 1줄 추가",
+    "role": "execution (synthesizer Top3 #2)",
+    "decision": "applied",
+    "reason": "순수 로깅 추가로 매매 로직/함수 시그니처를 전혀 바꾸지 않아 리스크가 거의 0. 재학습 동기 호출 동안 손절 체크가 멈춘다는 중요한 운영 사실을 run.log에서 바로 확인할 수 있게 해 운영 안전성(관측 가능성)을 즉시 높인다. py_compile로 문법 확인, AST 파싱으로 구문 오류 없음을 확인.",
+    "commit": "8c577ff"
+  },
+  {
+    "timestamp": "2026-11-22_0818",
+    "proposal": "lstm_model.py 주석(하루 10회 재학습, 90일 윈도우)과 질문에 전제된 '하루 1회·30일'의 불일치를 main_loop.py의 RETRAIN_TIMES_LOCAL/HISTORY_DAYS_FOR_TRAIN 실제값으로 확인",
+    "role": "lstm (synthesizer Top3 #1)",
+    "decision": "skipped",
+    "reason": "코드 변경이 필요한 제안이 아니라 사실 확인(조사) 작업. main_loop.py 44~48번째 줄을 직접 확인한 결과 RETRAIN_TIMES_LOCAL은 10개 항목(하루 10회), HISTORY_DAYS_FOR_TRAIN=90으로 lstm_model.py 주석(18~19번째 줄, '하루 10회', '90일')과 정확히 일치함을 확인했다. 질문에 전제됐던 '하루 1회·30일'이 실제 코드와 다른 것이었을 뿐, 코드/주석 자체에는 수정할 불일치가 없어 적용할 코드 변경이 없음. lstm 리포트의 다른 제안(ref_ret 피처, 체인 길이 기반 강제 재학습)의 전제조건으로서 이번에 확인을 완료했으므로, 다음 회차 분석팀은 이 값을 다시 조사할 필요 없음.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0818",
+    "proposal": "lstm_model.py의 build_features에 ref_ret(BTC 등 기준 코인 동시간 수익률) 피처 추가, main_loop.py 호출부도 기준 코인 캔들을 같이 넘기도록 수정",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "FEATURE_COLS(입력 차원) 변경으로 기존 저장 모델과 호환이 끊겨 전체 코인 강제 재학습이 필요하고, 리포트 스스로 '기준 코인 캔들과의 시간 정합이 어긋나면 오히려 노이즈가 늘 수 있다'고 명시해 효과를 코드 리뷰만으로 검증 불가능 — 운영 데이터(재학습 전후 val_accuracy 비교)가 필요한 영역. 과거 회차(2026-11-22_0718)의 market_ret 피처 제안과 동일한 이유로 반복 보류.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0818",
+    "proposal": "get_finetune_chain_length()로 조회한 체인 길이가 임계치(예: 30) 이상이면 main_loop.py의 retrain_lstm()에서 train_model(..., finetune=False)를 호출해 강제 전체 재학습으로 전환",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "모델 재학습 정책을 바꿔 실시간 추론(매매 신호의 입력)에 쓰이는 모델 품질에 직접 영향을 주는 변경이며, 리포트 스스로 '강제 전체 재학습은 그 시점 성능을 일시적으로 떨어뜨릴 수 있다(누적 파인튠 이점 리셋), 직후 추론 신호가 불안정해질 가능성'이라고 트레이드오프를 명시해 효과를 코드 리뷰만으로 검증 불가. 임계치(N=30) 자체도 운영 데이터(실제 체인 길이 분포, val_accuracy 추이) 없이는 적절성을 판단할 수 없음.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0818",
+    "proposal": "portfolio.py의 전역 LEVERAGE/STOP_LOSS_PCT를 COIN_RISK_PARAMS 딕셔너리로 바꿔 코인별 레버리지·손절% 차등화",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "매매 전략의 핵심 판단(레버리지, 손절 기준)을 직접 바꾸는 제안. 리포트 스스로 '저변동 설정을 과도하게 좁히면 정상 변동에도 자주 손절돼 거래비용이 늘 수 있다'고 명시해 코인별 적정 파라미터는 실제 운영 데이터(코인별 변동성 실측, 손절 발생 빈도) 없이는 판단 불가. 과거 회차(2026-11-22_0718)의 ATR 기반 차등 손절 제안과 동일한 이유로 반복 보류.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0818",
+    "proposal": "main_loop.py 476~481번째 줄 손절 체크 루프에서 stop_reason 발생 횟수를 카운트해 storage.add_snapshot() 호출 시 stop_loss_count 필드로 snapshots 테이블에 같이 저장",
+    "role": "risk (synthesizer Top3 #3)",
+    "decision": "skipped",
+    "reason": "snapshots는 60초마다 상시 쓰기 중인 테이블이라 새 컬럼을 추가하려면 ALTER TABLE 스키마 변경이 필요 — 판단기준 5번(스키마 마이그레이션은 사람이 직접 판단)에 해당. 과거 회차(2026-11-22_0718)에 동일한 성격의 drawdown_pct(MDD) 필드 추가 제안도 같은 이유로 보류된 바 있어 일관된 결론 유지. 스키마 변경 없이(별도 테이블이나 meta 활용 등) 안전하게 구현하는 방법은 사람이 직접 설계해야 함.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0818",
+    "proposal": "storage.py의 portfolios 테이블에 strategy_name/variant 컬럼을 ALTER TABLE로 추가해 set_portfolio()에서 parse_portfolio_key() 결과를 같이 기록",
+    "role": "storage",
+    "decision": "skipped",
+    "reason": "ALTER TABLE 스키마 변경이며, 리포트 스스로 '기존 행에는 NULL이 남아 백필 스크립트(UPDATE로 파싱 결과 채우기)를 한 번 돌려야 한다'고 명시해 기존 데이터 변환이 필요한 마이그레이션 — 판단기준 5번에 명확히 해당해 사람이 직접 판단해야 함.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0818",
+    "proposal": "storage.py에 prune_snapshots()와 동일 패턴으로 prune_trades(conn, keep_days=...) 추가해 trades 테이블 보관정책 도입",
+    "role": "storage",
+    "decision": "skipped",
+    "reason": "리포트 스스로 'keep_days 값은 거래 감사기록을 몇 년 보존할지를 사람이 먼저 정해야 하므로 코드만으로 결정하지 않는다'고 명시 — 판단기준 5번(사람이 직접 판단해야 하는 운영 정책)에 정확히 해당. 과거 여러 회차에서도 동일 이유로 보류 유지.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0818",
+    "proposal": "strategies.py의 BollingerRSIStrategy/TrendFollowStrategy 등에 df['volume'] 기반 저유동성 구간 필터(평균 거래량 대비 과소 시 HOLD) 추가",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "매매 전략의 핵심 판단(진입/청산 조건)을 바꾸는 제안이며, 리포트 스스로 '거래량 필터 추가 시 신호 빈도가 줄어 학습(learner.py)이 의존하는 샘플 수가 부족해질 수 있다'는 트레이드오프를 명시해 실제 효과는 백테스트/운영 데이터 없이는 판단 불가. 2026-11-22_0517/0618/0718 회차에서도 동일 성격의 거래량 필터 제안이 같은 이유로 반복 보류됨 — 일관된 결론 유지.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0818",
+    "proposal": "macd_momentum의 fast/slow(12/26) 파라미터를 ma_cross_rsi(9/26)와 겹치지 않게 더 짧게(예: 5/13) 분리해 중복 신호 문제 해소",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "매매 전략의 핵심 판단(임계값/파라미터)을 바꾸는 제안. 리포트 스스로 '더 짧게 바꾸면 노이즈에 더 민감해져 휩쏘(whipsaw) 빈도가 늘어날 수 있다'고 명시해 실제 손익 효과는 백테스트 없이는 검증 불가.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0818",
+    "proposal": "bollinger_rsi의 BUY 조건에 최근 N캔들 하락폭이 일정 % 이상이면 매수를 보류하는 급락 가드 추가",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "매매 전략의 핵심 판단(진입 조건)을 바꾸는 제안. 리포트 스스로 '급락 가드를 추가하면 실제 반등 기회(진짜 과매도 반등)도 함께 놓칠 수 있어 민감도 조정이 필요하다'고 명시해 코드 리뷰만으로 효과 검증 불가 — 운영 데이터(백테스트) 필요.",
+    "commit": null
   }
 ]
