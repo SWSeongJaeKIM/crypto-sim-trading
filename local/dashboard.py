@@ -341,18 +341,24 @@ function renderPositionDetail(slots) {
       const sign = s.unrealized_pnl_pct >= 0 ? '+' : '';
       pnlLabel = `${sign}${s.unrealized_pnl_pct.toFixed(1)}% (${sign}${Math.round(s.unrealized_pnl_krw).toLocaleString()}원)`;
     }
+    // 코인 간 자금 이동이 없는 구조라 한 슬롯이 손실나면 그 비중이 영구히
+    // 줄어든 채 고정될 수 있다 — 전체 평가액 중 이 코인 슬롯이 차지하는
+    // 비중을 같이 보여준다(analysis_team risk 리포트 2026-11-22_1818).
+    const weightLabel = (s.weight_pct !== null && s.weight_pct !== undefined)
+      ? `<span style="color:#5b6472; font-size:11px; white-space:nowrap;">비중 ${s.weight_pct.toFixed(1)}%</span>` : '';
 
     return `
       <div style="display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:7px 0; border-bottom:1px solid #22252c; font-size:13px;">
         <span style="font-weight:700; width:42px; flex-shrink:0;">${s.coin}</span>
         <span style="background:${badgeColor}22; color:${badgeColor}; border-radius:5px; padding:2px 7px; font-size:11px; font-weight:600; flex-shrink:0;">${badgeLabel}</span>
         <span style="color:#9aa0a6; white-space:nowrap;">${entryLabel} → ${priceLabel}</span>
+        ${weightLabel}
         <span class="${pnlCls}" style="margin-left:auto; font-weight:700; white-space:nowrap;">${pnlLabel}</span>
       </div>`;
   }).join('');
 
   const idleLine = idle.length
-    ? `<div style="color:#5b6472; font-size:12px; margin-top:6px;">대기 중(현금 보유): ${idle.map(s => s.coin).join(', ')}</div>`
+    ? `<div style="color:#5b6472; font-size:12px; margin-top:6px;">대기 중(현금 보유): ${idle.map(s => s.weight_pct !== null && s.weight_pct !== undefined ? `${s.coin}(비중 ${s.weight_pct.toFixed(1)}%)` : s.coin).join(', ')}</div>`
     : '';
   const emptyLine = active.length
     ? ''
@@ -825,6 +831,14 @@ def api_data():
             total = pf.total_value_krw(prices)
             initial = doc["initial_capital_krw"]
             pnl = (total / initial - 1.0) * 100
+            # 코인 간 자금 이동이 없는 구조(portfolio.py 상단 docstring)라, 특히
+            # cumulative 모드는 한 슬롯이 초반에 크게 손실나면 그 비중이 영구히
+            # 줄어든 채 고정된다 — "장기 성과가 실제로 6개 코인에 분산된 결과인지,
+            # 특정 1~2개 코인에만 좌우된 결과인지"를 pnl_pct/max_drawdown_pct만으로는
+            # 구분할 수 없었다. slot_values_krw()는 DB에 저장하지 않고 호출 시점
+            # 가격으로 즉석 계산만 하므로 배분/손절선에는 전혀 영향이 없다
+            # (analysis_team risk 리포트 2026-11-22_1818 발견점 #4, 구체적 제안 #3).
+            slot_values = pf.slot_values_krw(prices)
 
             slots = []
             # doc["slots"]의 원본 dict를 직접 읽지 않고 pf.slots(=CoinSlot 객체)를 쓴다.
@@ -848,6 +862,7 @@ def api_data():
                     position = "none"
                     unreal_pnl_krw = None
                     unreal_pnl_pct = None
+                slot_value = slot_values.get(coin, 0.0)
                 slots.append({
                     "coin": coin,
                     "position": position,
@@ -861,6 +876,8 @@ def api_data():
                     "leverage": portfolio.LEVERAGE if has_short else None,
                     "unrealized_pnl_krw": unreal_pnl_krw,
                     "unrealized_pnl_pct": unreal_pnl_pct,
+                    "value_krw": slot_value,
+                    "weight_pct": (slot_value / total * 100) if total else None,
                 })
 
             portfolios.append({

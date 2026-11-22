@@ -346,16 +346,21 @@ class Portfolio:
 
     # ---- 평가 ----
 
-    def total_value_krw(self, current_prices_krw: dict[str, float]) -> float:
-        """현금 + 롱 평가금액 + (숏 마진 + 숏 미실현손익). cash_krw에는 숏을
-        열 때 떼어둔 마진이 빠져 있으므로, 마진과 그 위의 미실현손익을 다시
-        더해줘야 전체 평가금액이 맞다. 미실현손익이 마진을 넘는 음수가
-        되더라도(강제청산 전) 여기서는 그대로 보여준다 — 실제 마진 초과
-        손실 제한은 close_short()에서, 손절 체크는 check_stop_loss_and_
-        liquidation()에서 별도로 처리."""
-        total = 0.0
+    def slot_values_krw(self, current_prices_krw: dict[str, float]) -> dict[str, float]:
+        """코인별 슬롯 평가금액(현금 + 롱 평가금액 + 숏 마진/미실현손익).
+
+        total_value_krw()가 내부에서 코인별로 계산하던 값을 그대로 분리한
+        것으로, 계산식은 완전히 동일하다 — cumulative 포트폴리오(코인 간
+        자금 이동이 없는 구조)에서 "장기 성과가 실제로 6개 코인에 분산된
+        결과인지, 특정 1~2개 코인에만 좌우된 결과인지"를 보여줄 지표가
+        없다는 점을 보완하기 위한 조회용 함수다(analysis_team risk 리포트
+        2026-11-22_1818 발견점 #4, 구체적 제안 #3). DB에는 저장하지 않고
+        호출 시점 가격으로 즉석 계산만 하므로(저장된 값이 과거 가격에
+        묶이는 문제 없음), 배분/손절선 등 매매 판단에는 전혀 영향을
+        주지 않는다."""
+        values = {}
         for coin, slot in self.slots.items():
-            total += slot.cash_krw
+            total = slot.cash_krw
             price = current_prices_krw.get(coin)
             if price is not None:
                 total += slot.qty * price
@@ -366,7 +371,20 @@ class Portfolio:
                 # 가격을 모르면 숏 평가는 못 하지만, 최소한 마진(원가)은 더해서
                 # 그 금액이 통째로 사라진 것처럼 보이지 않게 한다.
                 total += slot.short_margin_krw
-        return total
+            values[coin] = total
+        return values
+
+    def total_value_krw(self, current_prices_krw: dict[str, float]) -> float:
+        """현금 + 롱 평가금액 + (숏 마진 + 숏 미실현손익). cash_krw에는 숏을
+        열 때 떼어둔 마진이 빠져 있으므로, 마진과 그 위의 미실현손익을 다시
+        더해줘야 전체 평가금액이 맞다. 미실현손익이 마진을 넘는 음수가
+        되더라도(강제청산 전) 여기서는 그대로 보여준다 — 실제 마진 초과
+        손실 제한은 close_short()에서, 손절 체크는 check_stop_loss_and_
+        liquidation()에서 별도로 처리.
+
+        코인별 세부값은 slot_values_krw()로 분리되어 있고, 이 함수는 그
+        합을 반환할 뿐 계산식이 바뀌지는 않았다."""
+        return sum(self.slot_values_krw(current_prices_krw).values())
 
     def pnl_pct(self, current_prices_krw: dict[str, float]) -> float:
         tv = self.total_value_krw(current_prices_krw)
