@@ -57,6 +57,15 @@ SNAPSHOTS_PRUNE_KEEP_DAYS = 365   # snapshots 테이블도 predictions와 동일
 STRATEGY_NAMES = list(ALL_STRATEGIES.keys()) + ["lstm_predictor"]
 RESET_DAYS = 7                # "리셋" 포트폴리오를 며칠마다 1000만원으로 초기화할지
 PORTFOLIO_MODES = ["reset", "cumulative"]
+# 평상시(재학습이 섞이지 않은) 사이클 처리시간이 이 값(초)을 넘으면 경고 로그를
+# 남긴다. 재학습 구간은 이미 610행 근처에서 소요시간을 별도로 로깅하므로 대상이
+# 아니다. 이전에는 "_elapsed"(651행 근처)가 60초 주기 보정에만 쓰이고 로그로
+# 남지 않아, 네트워크 지연 누적이나 전략 수 증가로 평상시 사이클이 점점 느려져
+# 60초에 근접해가는 드리프트 조짐을 재학습 로그와 달리 사전에 포착할 방법이
+# 없었다 (analysis_team execution 리포트 2026-11-22_0018 발견점 #2,
+# synthesizer Top3 #1). 매 사이클(1분 간격) 무조건 찍으면 로그가 금방 폭주하므로
+# 임계치 초과 시에만 남긴다.
+CYCLE_ELAPSED_WARN_THRESHOLD_SEC = 30
 # 클라우드 6에이전트 분석팀(analysis_team/)이 GitHub Actions 스케줄로 매시간
 # 이 분(UTC)에 도는데, 이 PC 루프는 그 스케줄을 실행하지 않고 "다음 실행이
 # 몇 분 남았는지"만 콘솔에 보여주기 위해 참고한다(실제 실행 주기를 바꾸고
@@ -589,7 +598,14 @@ def main():
             log.exception(f"사이클 실행 중 에러 (스킵하고 계속): {e}")
 
         now_local = datetime.now()
+        # _elapsed(아래 650행 근처) 경고 로그가 재학습 때문에 느려진 사이클까지
+        # 중복으로 찍지 않도록, 이번 반복에서 재학습을 시도했는지를 별도로
+        # 기록한다. retrain_is_due(last_retrain_at)는 재학습 성공 시 last_retrain_at이
+        # 바로 갱신돼 그 이후에는 "지금 당장 재학습이 필요한가"만 답할 뿐
+        # "이번 반복에서 재학습을 했는가"를 알 수 없어 별도 플래그가 필요하다.
+        _retrain_attempted_this_iteration = False
         if retrain_is_due(last_retrain_at):
+            _retrain_attempted_this_iteration = True
             # 재학습 동안 run_one_cycle()이 동기적으로 멈추는 공백 구간의 실제 길이를
             # run.log에서 가늠할 수 있도록 소요 시간을 기록한다.
             # (analysis_team 리포트 2026-11-16_1521_execution.md)
@@ -649,6 +665,15 @@ def main():
         # 재학습이 섞인 사이클처럼 이미 60초를 넘겼으면 남는 시간이 0이라 바로 다음
         # 사이클로 넘어간다 (analysis_team execution 리포트 2026-11-16_1718 제안).
         _elapsed = time.monotonic() - _cycle_started
+        # 재학습이 섞이지 않은 평상시 사이클인데도 임계치를 넘겼다면, 재학습과
+        # 무관한 원인(네트워크 지연 누적, 전략/코인 수 증가 등)으로 처리시간이
+        # 60초 주기에 근접하고 있다는 조짐이라 경고를 남긴다 (analysis_team
+        # execution 리포트 2026-11-22_0018, synthesizer Top3 #1). 재학습이 있었던
+        # 사이클은 610행 근처에서 이미 소요시간을 별도로 로깅하므로 중복 경고를
+        # 피하기 위해 여기서는 제외한다.
+        if not _retrain_attempted_this_iteration and _elapsed > CYCLE_ELAPSED_WARN_THRESHOLD_SEC:
+            log.warning(f"사이클 처리에 {_elapsed:.1f}초 소요(60초 중) — "
+                        f"{CYCLE_ELAPSED_WARN_THRESHOLD_SEC}초 임계치 초과, 60초 주기에 근접")
         _sleep_remaining = max(0.0, CYCLE_INTERVAL_SEC - _elapsed)
         _slept = 0.0
         while _slept < _sleep_remaining:
