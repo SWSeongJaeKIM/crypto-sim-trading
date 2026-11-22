@@ -1422,5 +1422,117 @@
     "decision": "skipped",
     "reason": "synthesizer가 risk 쪽 근거(TRADE_FRACTION이 이미 확신도 기반 최대 90%까지 움직이는 구조가 코드로 확인됨, 수수료는 거래 횟수에 비례해 확정적으로 발생)가 strategy 쪽(파라미터 단축 효과는 백테스트 전 불확실, 제안자 본인도 재검토 전제를 닮) 보다 탄탄하다고 판단해 MACD 파라미터 변경을 이번 Top3에 넣지 않기로 함 — 위에서 이미 개별적으로 skip 처리한 strategy 제안과 결론이 일치. 변경 전 반드시 휩쏘 빈도/누적 수수료를 백테스트로 측정하는 것을 선행 조건으로 둠. 같은 맥락에서 lstm의 BTC 수익률 피처 추가도 strategy의 전략 다양화(윈도우 분리) 방향과 완전히 같은 방향은 아니라는 점을 다음 검토 시 유의해야 함.",
     "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0618",
+    "proposal": "trades.reason 인덱스 추가 (CREATE INDEX idx_trades_reason ON trades(reason)) — stop_loss_counts_by_coin()의 LIKE 전체스캔 해소",
+    "role": "storage",
+    "decision": "applied",
+    "reason": "순수 추가 인덱스로 기존 데이터/쿼리 결과를 바꾸지 않고 CREATE INDEX IF NOT EXISTS 패턴이라 기존 DB에도 안전. 효과(인덱스 생성)를 메모리 SQLite로 즉시 검증 가능. synthesizer Top3 #1.",
+    "commit": "0c94b772ed1a0354927685abb120af0a61e380a2"
+  },
+  {
+    "timestamp": "2026-11-22_0618",
+    "proposal": "finetune_chain_length 기준 자동 전체재학습 트리거 (chain_length >= 임계값이면 finetune=False)",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "이미 2026-11-22_0018 회차에서 동일 제안이 반영되어 main_loop.py에 FINETUNE_CHAIN_LENGTH_RESET_THRESHOLD=30 및 retrain_lstm() 내 force_full_retrain 분기로 구현되어 있음을 코드에서 확인(main_loop.py:84, 544-551). 중복 작업이라 재적용하지 않음.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0618",
+    "proposal": "재학습 중 Ctrl+C 종료 메시지를 _in_retrain 플래그로 분기 (재학습 중엔 '재학습이 끝나야 정지합니다' 안내)",
+    "role": "execution",
+    "decision": "applied",
+    "reason": "UX/로그 메시지 개선만으로 매매 로직·재학습 로직에는 영향 없음. 전역 플래그 분기 로직을 별도 스크립트로 시뮬레이션해 의도대로 동작함을 확인. synthesizer 보너스 언급('여유가 있다면 ... 거의 공짜 수준').",
+    "commit": "bb4f56b0f744ef013aee3ed481178e54786ce0ba"
+  },
+  {
+    "timestamp": "2026-11-22_0618",
+    "proposal": "손실 중 포지션 추가매수/숏 비중 축소 (fraction *= 0.3 등 분기 추가)",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "베팅 비율(돈이 움직이는 방식)을 바꾸는 핵심 판단. 리포트 스스로 '반등을 노리는 전략 특성과 충돌할 수 있어 전략 유형별로 적용 여부를 다르게 둘 필요'를 명시해, 코드 리뷰만으로는 순효과(하락 손실 축소 vs 반등 수익 기회 축소)를 검증할 수 없음(판단 기준 4번). 백테스트/실거래 데이터로 전략별 순효과를 먼저 확인해야 함.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0618",
+    "proposal": "코인별 STOP_LOSS_PCT 차등화 (변동성 낮은/높은 코인별 다른 손절% 또는 역가중 배분)",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "손절 기준(핵심 판단)을 바꾸는 제안이며 효과가 실제 운영 데이터(코인별 whipsaw 빈도, 수수료 드래그)로만 검증 가능. 리포트도 '실제 손익·거래빈도 평가는 코드만으로 판단 불가'라고 명시.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0618",
+    "proposal": "전략별 snapshots에 MDD(최고점 대비 낙폭) 지표 추가 저장",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "매매 결정 자체를 바꾸지 않는 추가 모니터링 지표라 판단 기준 2번(베팅/손절 핵심판단)에는 해당하지 않지만, snapshots 스키마에 새 컬럼을 추가하고 기존에 쌓인 행에는 소급 적용이 안 돼(리포트 자체 인정) 데이터 일관성 문제가 생긴다 — 판단 기준 3번(기존 동작/데이터 변환이 필요한 변경 제외)에 해당해 보수적으로 보류. 사람이 스키마 변경 범위를 먼저 정해야 함.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0618",
+    "proposal": "build_features()에 시간대 sin/cos 피처 추가",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "N_FEATURES가 바뀌어 기존 저장된 모든 코인 LSTM 가중치와 입력 차원이 맞지 않아 전체 재학습이 강제됨(리포트 자체 인정) — 기존 학습 이력을 버리는 비용이 있고, 실제 정확도 개선 여부는 운영 데이터(실시간 val_accuracy 추이)로만 확인 가능해 판단 기준 2/4번에 해당. 보류.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0618",
+    "proposal": "fetch_minute_history에 증분 수집(since 파라미터) 추가해 재학습마다 90일 전체 재수집하는 구조 개선",
+    "role": "execution",
+    "decision": "skipped",
+    "reason": "main_loop.py가 상시 의존하는 핵심 데이터 파이프라인 구조 변경(함수 시그니처 변경, 캐시 병합, 공백 감지 폴백 포함)이라 기존 동작을 깨뜨릴 위험이 있음. 리포트 자체가 '과거 검토에서도 같은 이유로 통합 테스트 없이는 반영하지 않음으로 보류된 바 있음'이라고 명시 — 과거 판단과 동일하게 보류 유지.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0618",
+    "proposal": "trades 테이블에 prune(보관주기) 추가",
+    "role": "storage",
+    "decision": "skipped",
+    "reason": "거래 기록을 영구 삭제하는 작업으로, keep_days 적정값은 사람이 먼저 정해야 한다는 기존 결론(과거 리포트에서도 동일하게 보류)이 이번 리포트에서도 재확인됨. 그대로 보류 유지.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0618",
+    "proposal": "ma_cross_rsi/macd_momentum을 1분봉 스캘핑용으로 기간 단축 재튜닝 (RSI 7~9, BB 10~14, MACD 5/13/4 등)",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "매매 전략의 핵심 판단(진입/청산 임계값)을 바꾸는 제안. 리포트 스스로 '기간 단축은 노이즈·수수료 증가 가능'을 리스크로 인정하고 백테스트 검증을 전제로 함. synthesizer도 risk의 whipsaw/수수료 우려(코드로 확인되는 사실)가 strategy의 반응성 개선 가설(검증 전)보다 근거가 탄탄하다고 판단해 Top3에서 제외함 — 동일 결론으로 보류.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0618",
+    "proposal": "ma_cross_rsi와 macd_momentum의 윈도우를 분리하거나 learner.py에서 신호 중복률을 측정해 가중치 조정",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "두 전략 간 파라미터 분리는 learner.py의 기존 튜닝 이력/가중치 호환성을 깨뜻 수 있어 재검증이 필요하다고 리포트가 명시 — 코드 리뷰만으로 효과 검증 불가. 보류.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0618",
+    "proposal": "4개 조건식 signal()에 공통 거래량 필터 추가 (평균 거래량의 30% 미만이면 HOLD로 억제)",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "매매 전략의 핵심 판단(진입/청산 조건)을 바꾸는 제안이고, 리포트 스스로 '저유동성 구간의 정당한 신호도 걸러낼 수 있어 임계값 튜닝 필요'를 명시해 코드 리뷰만으로 효과를 검증할 수 없음. 2026-11-22_0517 회차에서 동일 성격 제안이 이미 같은 이유로 보류됨 — 일관된 결론 유지.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0618",
+    "proposal": "BollingerRSIStrategy 매수 조건에 RSI 반전 확인 추가 (r.iloc[-1] > r.iloc[-2])",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "진입 조건(핵심 판단)을 바꾸는 제안이며, 리포트 스스로 '신호 지연을 유발해 일부 빠른 반등을 놓칠 수 있음'을 리스크로 명시 — 순효과는 백테스트가 필요. 보류.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0618",
+    "proposal": "(역할 간 긴장관계, synthesizer 기록) strategy의 지표 기간 단축(반응성 개선)이 lstm의 시간대 피처 추가(N_FEATURES 변경 → 전체 재학습 강제)와 겹치면, execution이 지적한 재학습 중 매매 정지 시간이 더 길어질 수 있음",
+    "role": "synthesizer",
+    "decision": "skipped",
+    "reason": "두 제안(strategy 기간단축, lstm 시간대 피처) 모두 위에서 개별적으로 보류 처리되어 충돌 자체가 발생하지 않음. synthesizer가 제안한 선행조건(재학습 비동기화 또는 증분 데이터 수집)인 execution의 fetch_minute_history 증분 수집 제안도 통합테스트 리스크로 이번 회차에 보류 — 세 제안 모두 다음 회차 이후 사람이 순서를 정해 단계적으로 검토해야 함.",
+    "commit": null
   }
 ]
