@@ -688,3 +688,45 @@ def stop_loss_counts_by_coin(conn) -> list[dict]:
         }
         for r in rows
     ]
+
+
+def simultaneous_stop_events(conn) -> list[dict]:
+    """같은 전략에서 같은 분(1분)에 2개 이상 코인이 동시에 손절/강제청산된
+    사례 집계 (기록용 — 트레이딩 로직은 전혀 건드리지 않는 순수 조회).
+
+    stop_loss_counts_by_coin()은 "코인별로 얼마나 자주 손절당하는가"(개별
+    코인 리스크)를 보여주지만, "여러 코인이 한꺼번에 급락해 동시에 손절당하는
+    시장 전체 충격"은 구분하지 못한다 — risk 리포트가 2회차 연속(2026-11-16,
+    2026-11-22) 이 지표의 부재를 지적했고, 이번 회차에 trades.timestamp만으로
+    새 스키마 없이 근사 가능함을 확인했다(analysis_team risk 리포트
+    2026-11-22_1818 발견점 #3, 구체적 제안 #1).
+
+    main_loop.py의 매매 사이클이 60초 간격이므로 timestamp를 분 단위
+    (substr(timestamp,1,16))로 truncate하면 실제 사이클 경계와 거의
+    일치한다 — 단, 사이클 경계(예: 59초/01초)에 걸친 동시 발생은 서로 다른
+    분으로 나뉘어 놓칠 수 있는 느슨한 지표라는 점을 risk 리포트가 명시했다
+    (참고용 지표, 정밀 신호 아님). timestamp는 ISO8601 문자열
+    (YYYY-MM-DDTHH:MM:SS...)이라 앞 16자(분까지)만 잘라도 사전식 순서와
+    시간 순서가 일치한다(prune_predictions() 등이 이미 쓰는 문자열 비교
+    방식과 동일)."""
+    rows = conn.execute(
+        """
+        SELECT strategy, substr(timestamp, 1, 16) AS minute,
+               COUNT(DISTINCT coin) AS coin_count,
+               GROUP_CONCAT(DISTINCT coin) AS coins
+        FROM trades
+        WHERE reason LIKE '손절%' OR reason LIKE '강제청산%'
+        GROUP BY strategy, minute
+        HAVING COUNT(DISTINCT coin) >= 2
+        ORDER BY minute DESC
+        """
+    ).fetchall()
+    return [
+        {
+            "strategy": r["strategy"],
+            "minute": r["minute"],
+            "coin_count": r["coin_count"],
+            "coins": r["coins"],
+        }
+        for r in rows
+    ]

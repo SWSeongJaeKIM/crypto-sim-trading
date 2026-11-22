@@ -228,6 +228,9 @@ PAGE = """
     <h3>코인별 손절/강제청산 발생 횟수 <span style="color:#9aa0a6;font-weight:400;font-size:12px;">(전체 기간 누적 — 변동성이 큰 코인이 실제로 더 자주 손절에 걸리는지 참고용. 이 집계만으로 손절선/배분을 바로 바꾸지는 않음)</span></h3>
     <table id="stop-loss-counts"><thead><tr><th>코인</th><th>손절</th><th>강제청산</th><th>합계</th></tr></thead><tbody></tbody></table>
 
+    <h3>동시다발 손절/강제청산 <span style="color:#9aa0a6;font-weight:400;font-size:12px;">(같은 전략에서 같은 분에 2개 이상 코인이 함께 손절/강제청산된 사례 — "시장 전체 충격" 참고용, 분 단위 근사라 정밀 신호는 아님)</span></h3>
+    <table id="simultaneous-stops"><thead><tr><th>시각(분)</th><th>전략</th><th>코인 수</th><th>코인</th></tr></thead><tbody></tbody></table>
+
     <h3>LSTM 모델 학습 기록 (코인별 최근 10회)</h3>
     <table id="trainings"><thead><tr><th>시각</th><th>코인</th><th>방식</th><th>데이터기간</th><th>샘플수</th><th>정확도</th></tr></thead><tbody></tbody></table>
   </div>
@@ -730,6 +733,11 @@ async function load() {
   document.querySelector('#stop-loss-counts tbody').innerHTML = slRows.length
     ? slRows.map(s => `<tr><td>${s.coin}</td><td>${s.stop_loss_count}</td><td>${s.liquidation_count}</td><td>${s.total_count}</td></tr>`).join('')
     : '<tr><td colspan="4" style="color:#9aa0a6;">아직 손절/강제청산 기록 없음</td></tr>';
+
+  const simRows = d.simultaneous_stops || [];
+  document.querySelector('#simultaneous-stops tbody').innerHTML = simRows.length
+    ? simRows.map(s => `<tr><td>${s.minute.replace('T',' ')}</td><td>${s.strategy}</td><td>${s.coin_count}</td><td>${s.coins}</td></tr>`).join('')
+    : '<tr><td colspan="4" style="color:#9aa0a6;">아직 동시다발 손절/강제청산 기록 없음</td></tr>';
 }
 load();
 setInterval(load, 15000);
@@ -924,6 +932,12 @@ def api_data():
         # 건드리지 않는다 (analysis_team risk 리포트 2026-11-22_0517 구체적
         # 제안 #2, synthesizer Top3 #3).
         stop_loss_counts = storage.stop_loss_counts_by_coin(conn)
+        # "여러 코인이 한꺼번에 손절당하는 시장 전체 충격"을 보여주는 참고용
+        # 집계 — 위 stop_loss_counts(코인별)와 달리 strategy+분 단위로 2개
+        # 이상 코인이 동시에 손절/강제청산된 사례만 모은다. 트레이딩 로직은
+        # 건드리지 않는다 (analysis_team risk 리포트 2026-11-22_1818 발견점 #3,
+        # 구체적 제안 #1).
+        simultaneous_stops = storage.simultaneous_stop_events(conn)
 
     # predictions/model_trainings 보관주기가 실제로 필요한 시점인지 판단할
     # 관측 지표 (analysis_team 리포트 2026-11-16_1619_storage.md 제안).
@@ -934,6 +948,7 @@ def api_data():
                      "trades": trades, "trainings": trainings,
                      "prediction_accuracy": prediction_accuracy,
                      "stop_loss_counts": stop_loss_counts,
+                     "simultaneous_stops": simultaneous_stops,
                      "db_size_mb": db_size_mb})
 
 
