@@ -220,7 +220,13 @@ def fetch_latest_minute_candles(market: str, count: int = 200,
     # 2026-11-22_1219 발견점 #2, synthesizer Top3 #1). 호출자가 몰라도
     # 안전하도록 피호출부에서 클램프하고, 잘렸을 때만 1회성 디버그 로그를 남긴다.
     if count > 200:
-        log.debug(f"{market} count={count}가 Upbit 단일 요청 상한(200)을 초과해 200으로 조정")
+        # main_loop.py가 INFO 레벨로 고정 실행되는 환경(logging.basicConfig(level=logging.INFO))에서
+        # log.debug는 콘솔/run.log 어디에도 출력되지 않아, 이 클램프가 실제로 발동해도
+        # "왜 캔들이 부족한지" 원인 추적이 불가능했다 (analysis_team execution 리포트
+        # 2026-11-22_2018, synthesizer Top3 #1). WARNING으로 올려 가시성을 확보한다.
+        # 참고: 이 메시지는 장애가 아니라 클램프가 설계대로 안전하게 동작 중인
+        # 정상 방어 동작이다.
+        log.warning(f"{market} count={count}가 Upbit 단일 요청 상한(200)을 초과해 200으로 조정 (정상 방어 동작, 참고용)")
         count = 200
     url = f"{UPBIT_BASE}/v1/candles/minutes/1?market={market}&count={count}"
     raw = _http_get_json(url, timeout=timeout, retries=retries)
