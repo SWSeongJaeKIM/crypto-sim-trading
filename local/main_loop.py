@@ -564,6 +564,11 @@ def run_one_cycle(conn) -> None:
         log.exception(f"상태 메타(status) 갱신 중 에러, 이번 사이클은 스킵 (다음 사이클에 재시도, "
                        f"이미 처리된 전략들의 매매 기록에는 영향 없음): {e}")
     log.info(f"사이클 완료 @ {now} | 가격 샘플 BTC={prices_krw.get('BTC')}")
+    # 정상 완료 시 progress.stage를 "cycle_running"에 멈춰두지 않고 "idle"로
+    # 되돌린다 — 그동안은 다음 사이클 시작(위 379행 "collecting")까지 약 55초+
+    # 동안 대시보드가 실제로는 대기 중인데도 "신호 계산/매매 중"으로 표시됐다
+    # (analysis_team execution 리포트 2026-11-22_1518 발견점 #2).
+    set_progress("idle", "대기 중")
 
 
 def retrain_lstm() -> bool:
