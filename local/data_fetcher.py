@@ -157,7 +157,8 @@ def _parse_minute_df(raw: list[dict]) -> pd.DataFrame:
 
 
 def fetch_latest_minute_candles(market: str, count: int = 200,
-                                 timeout: int = 5, retries: int = 2) -> pd.DataFrame:
+                                 timeout: int = 5, retries: int = 2,
+                                 rate_limiter: "_RateLimiter | None" = None) -> pd.DataFrame:
     """가장 최신 1분봉 count개 (실시간 신호 계산용). 마지막 행이 가장 최근 캔들.
 
     기본 timeout/retries는 _http_get_json()의 기본값(10/3, fetch_minute_history처럼
@@ -165,7 +166,14 @@ def fetch_latest_minute_candles(market: str, count: int = 200,
     통해 60초 주기 매매 사이클마다 호출되므로, 한 코인이 느려지면 최대 10초*3회+백오프
     ≈33초까지 걸려 CYCLE_ELAPSED_WARN_THRESHOLD_SEC(30초) 경고를 유발할 수 있었다
     (analysis_team execution 리포트 2026-11-22_0318, synthesizer Top3 #1).
+
+    rate_limiter: 주어지면 요청 전에 이걸로 전역 페이싱을 한다 — fetch_minute_history와
+    같은 패턴으로, fetch_all_latest_candles()가 6코인 스레드가 공유하는 리미터를
+    넘겨서 전체 요청 속도를 제어하는 용도. None(기본값)이면 예전과 동일하게
+    페이싱 없이 바로 요청한다(단독 호출/테스트 동작 그대로 유지).
     """
+    if rate_limiter is not None:
+        rate_limiter.wait()
     url = f"{UPBIT_BASE}/v1/candles/minutes/1?market={market}&count={count}"
     raw = _http_get_json(url, timeout=timeout, retries=retries)
     if not raw:
@@ -281,12 +289,26 @@ def fetch_minute_history(market: str, days: int = 14, sleep_sec: float = 0.12,
 def fetch_all_latest_candles(count: int = 200) -> dict[str, pd.DataFrame]:
     """6대 코인의 최신 1분봉 (매분 실행되는 메인 루프에서 호출). 코인당 호출이
     1번뿐이라 원래도 느리진 않지만, 순차 대신 동시에 보내서 사이클 자체를
-    조금이라도 더 짧게 만든다."""
+    조금이라도 더 짧게 만든다.
+
+    fetch_all_minute_history()는 6코인 스레드가 전역 _RateLimiter를 공유해
+    Upbit 호출 속도를 명시적으로 제어하는데, 이 함수는 그런 보호 없이 6개
+    요청을 완전히 동시에 쏘고 있었다(analysis_team execution 리포트
+    2026-11-22_0718 발견점 #3) — 두 경로의 설계가 비대칭적이었다. 여기서도
+    같은 _RateLimiter를 적용해 설계를 통일한다. 다만 이 경로는 60초마다 호출되고
+    코인 수가 6개뿐이라 history_rate_limiter와 같은 0.12초 간격을 쓰면 최악의
+    경우 6*0.12=0.72초가 추가로 걸려 CYCLE_ELAPSED_WARN_THRESHOLD_SEC(30초)
+    경고 여유를 줄일 수 있으므로, 간격을 충분히 짧게(0.02초) 잡아 Upbit
+    순간 동시 요청 수만 완화하고 전체 사이클 길이에는 사실상 영향을 주지
+    않도록 한다.
+    """
     result: dict[str, pd.DataFrame] = {}
+    latest_rate_limiter = _RateLimiter(min_interval_sec=0.02)
 
     def _fetch_one(coin: str) -> tuple[str, pd.DataFrame | None]:
         try:
-            return coin, fetch_latest_minute_candles(UPBIT_MARKETS[coin], count=count)
+            return coin, fetch_latest_minute_candles(UPBIT_MARKETS[coin], count=count,
+                                                       rate_limiter=latest_rate_limiter)
         except Exception as e:
             # FetchError(네트워크/HTTP 재시도 소진)뿐 아니라, Upbit 응답 형식이
             # 예상과 달라 _parse_minute_df 등에서 터지는 KeyError류까지 전부 잡아서
