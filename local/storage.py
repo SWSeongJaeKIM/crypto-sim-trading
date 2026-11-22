@@ -79,7 +79,14 @@ def make_portfolio_key(strategy: str, variant: str) -> str:
 def parse_portfolio_key(key: str) -> tuple[str, str]:
     """make_portfolio_key()의 역함수. 구분자가 없거나 뒤쪽이 reset/cumulative가
     아닌 경우(옛 데이터, 예상 밖의 키)는 (key, "cumulative")로 안전하게
-    폴백한다 — main_loop.py/dashboard.py가 기존에 각자 구현했던 폴백과 동일."""
+    폴백한다 — main_loop.py/dashboard.py가 기존에 각자 구현했던 폴백과 동일.
+
+    TODO(차기 스키마 개편 시 참고): 이 키는 한 컬럼(strategy)에 두 개의 논리적
+    차원(전략, reset/cumulative 여부)을 문자열로 인코딩하는 설계다. 지금 당장
+    스키마를 바꿀 필요는 없지만(기존 데이터 마이그레이션 비용 대비 이득이
+    작음), 다음에 portfolios 테이블 스키마를 손보게 되면 (strategy, variant)
+    복합 PK로 전환해 이 역파싱 폴백 자체를 없애는 것을 고려할 것
+    (analysis_team storage 리포트 2026-11-22_1219 발견점 #2)."""
     strategy, sep, variant = key.rpartition(PORTFOLIO_KEY_SEP)
     if not sep or variant not in ("reset", "cumulative"):
         return key, "cumulative"
