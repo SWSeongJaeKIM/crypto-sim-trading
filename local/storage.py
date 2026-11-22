@@ -119,6 +119,12 @@ CREATE INDEX IF NOT EXISTS idx_trades_strategy ON trades(strategy, timestamp DES
 -- idx_trades_strategy의 선두 컬럼(strategy)을 못 써서 전체 스캔이 된다.
 -- timestamp 단독 인덱스를 추가해 그 경로가 인덱스로 처리되게 한다.
 CREATE INDEX IF NOT EXISTS idx_trades_timestamp ON trades(timestamp DESC);
+-- stop_loss_counts_by_coin()이 "WHERE reason LIKE '손절%' OR reason LIKE
+-- '강제청산%'"로 trades를 거르는데, reason 컬럼에는 인덱스가 없어 매 호출마다
+-- (dashboard.py 새로고침 시) 전체 스캔이 발생한다. prefix LIKE는 인덱스를 탈 수
+-- 있으므로 reason 인덱스를 추가해 거래량이 늘어도 이 경로가 느려지지 않게 한다
+-- (analysis_team storage 리포트 2026-11-22_0618 발견점 #1, synthesizer Top3 #1).
+CREATE INDEX IF NOT EXISTS idx_trades_reason ON trades(reason);
 CREATE TABLE IF NOT EXISTS snapshots (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     strategy TEXT NOT NULL,
