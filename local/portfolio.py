@@ -276,7 +276,17 @@ class Portfolio:
         slot = self.slots[coin]
         if slot.qty > 0:
             self.sell(coin, price_krw, pct_of_qty=1.0, reason=f"{reason} (롱 정리 후 숏 전환)")
-        self.open_short(coin, price_krw, pct_of_cash=fraction, reason=reason)
+        # open_short()의 pct_of_cash는 "마진" 비율이고, open_short 내부에서
+        # notional = margin * LEVERAGE로 LEVERAGE배를 곱한다. fraction은
+        # confidence_to_trade_fraction()이 만든 0.1~0.9 비율로 buy()의
+        # pct_of_cash(현금 중 비율 = 그대로 notional 비율)와 동일 스케일이라,
+        # 레버리지를 감안하지 않고 그대로 넘기면 같은 확신도에서 숏 notional이
+        # 롱보다 LEVERAGE배 커진다 (손절 시 손실도 LEVERAGE배). fraction을
+        # LEVERAGE로 나눠 margin*LEVERAGE(=notional)가 다시 cash*fraction이
+        # 되도록 맞춰, 같은 확신도에서 롱/숏의 자금 노출(notional)을 동일하게
+        # 만든다 (analysis_team 리포트 2026-11-22_1418_risk.md 발견점 #1,
+        # synthesizer Top3 #2).
+        self.open_short(coin, price_krw, pct_of_cash=fraction / LEVERAGE, reason=reason)
 
     # ---- 손절 / 강제청산 ----
     # main_loop.py가 매 사이클(1분)마다 모든 코인에 대해 호출해야 한다.
