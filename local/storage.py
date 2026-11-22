@@ -140,6 +140,22 @@ CREATE TABLE IF NOT EXISTS snapshots (
     pnl_pct REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_snapshots_strategy ON snapshots(strategy, timestamp DESC);
+-- cumulative 포트폴리오(코인 간 자금 이동이 없는 구조)에서 반복 손절로 한
+-- 코인의 슬롯이 계속 줄고 다른 코인이 커지는 드리프트가 누적돼도, 기존
+-- snapshots(총액만)로는 "쏠림이 언제부터 심해졌는지" 사후에 알 수 없었다.
+-- portfolio.slot_values_krw()가 이미 즉석 계산을 제공하므로, snapshots 기존
+-- 스키마(ALTER)는 건드리지 않고 완전히 새 테이블에 시계열로만 남긴다 — 과거
+-- 사이클 행이 존재하지 않는 것은 수용 가능한 공백이며(이후부터 추적 시작),
+-- 기존 조회 경로/데이터에는 전혀 영향 없다 (analysis_team risk 리포트
+-- 2026-11-22_1922 발견점 #2, synthesizer Top3 #3).
+CREATE TABLE IF NOT EXISTS slot_values (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    strategy TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    coin TEXT NOT NULL,
+    value_krw REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_slot_values_strategy ON slot_values(strategy, timestamp DESC);
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value_json TEXT NOT NULL
@@ -331,6 +347,18 @@ def add_snapshot(conn, strategy: str, timestamp: str, total_value_krw: float, pn
     conn.execute(
         "INSERT INTO snapshots (strategy, timestamp, total_value_krw, pnl_pct) VALUES (?,?,?,?)",
         (strategy, timestamp, total_value_krw, pnl_pct),
+    )
+
+
+def add_slot_values(conn, strategy: str, timestamp: str, values: dict[str, float]) -> None:
+    """portfolio.slot_values_krw()가 계산한 코인별 평가금액을 그대로 한 사이클치
+    시계열로 남긴다. 배분/손절선 등 매매 판단에는 전혀 쓰이지 않는 순수 진단용
+    기록이다 (analysis_team risk 리포트 2026-11-22_1922 발견점 #2)."""
+    if not values:
+        return
+    conn.executemany(
+        "INSERT INTO slot_values (strategy, timestamp, coin, value_krw) VALUES (?,?,?,?)",
+        [(strategy, timestamp, coin, value) for coin, value in values.items()],
     )
 
 

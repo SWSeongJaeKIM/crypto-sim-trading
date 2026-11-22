@@ -603,6 +603,13 @@ def run_one_cycle(conn) -> None:
                 storage.set_portfolio(conn, key, pf.to_doc(), now)
                 storage.add_trades(conn, key, pf.new_trades_as_dicts())
                 storage.add_snapshot(conn, key, now, total_value, pnl_pct)
+                # 코인별 자금 쏠림(slot) 시계열 — cumulative 모드에서 반복
+                # 손절로 생기는 코인 간 드리프트를 사후 분석할 수 있게 한다.
+                # 이미 계산만 하고 저장은 안 하던 slot_values_krw() 호출을
+                # 추가한 것뿐이라 배분/손절선 등 매매 판단에는 영향 없음
+                # (analysis_team risk 리포트 2026-11-22_1922 발견점 #2,
+                # synthesizer Top3 #3).
+                storage.add_slot_values(conn, key, now, pf.slot_values_krw(prices_krw))
         except Exception as e:
             log.exception(f"[{strat_name}] 전략 처리 중 에러, 이번 사이클은 건너뜀 "
                            f"(이미 처리된 다른 전략들의 매매 기록에는 영향 없음): {e}")
