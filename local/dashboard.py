@@ -23,6 +23,7 @@ import urllib.request
 
 from flask import Flask, jsonify, render_template_string
 
+import portfolio
 import storage
 
 app = Flask(__name__)
@@ -193,10 +194,10 @@ PAGE = """
     <div class="sub" id="status">불러오는 중...</div>
     <div class="progress-bar"><span class="dot dot-idle" id="progress-dot"></span><span id="progress-text">상태 확인 중...</span></div>
 
-    <h3>📅 7일 리셋 포트폴리오 <span style="color:#9aa0a6;font-weight:400;font-size:12px;">(7일마다 1000만원으로 초기화 — 최근 성과 비교용)</span></h3>
+    <h3>📅 7일 리셋 포트폴리오 <span style="color:#9aa0a6;font-weight:400;font-size:12px;">(7일마다 1000만원으로 초기화 — 최근 성과 비교용, 카드를 누르면 코인별 보유 현황이 펼쳐집니다)</span></h3>
     <div class="cards" id="cards-reset"></div>
 
-    <h3>📈 누적 포트폴리오 <span style="color:#9aa0a6;font-weight:400;font-size:12px;">(시작부터 지금까지 쭉 — 장기 성과용)</span></h3>
+    <h3>📈 누적 포트폴리오 <span style="color:#9aa0a6;font-weight:400;font-size:12px;">(시작부터 지금까지 쭉 — 장기 성과용, 카드를 누르면 코인별 보유 현황이 펼쳐집니다)</span></h3>
     <div class="cards" id="cards-cumulative"></div>
 
     <h3>거래 내역 <span id="trades-count" style="color:#9aa0a6;font-weight:400;font-size:12px;"></span></h3>
@@ -214,14 +215,6 @@ PAGE = """
         <option value="SHORT_LIQUIDATED">숏 강제청산</option>
       </select></label>
       <button onclick="resetTradeFilters()" style="background:#1a1d24; color:#9aa0a6; border:1px solid #2a2d35; border-radius:6px; padding:4px 10px; font-size:12px; cursor:pointer;">필터 초기화</button>
-    </div>
-
-    <div id="trades-chart-card" style="background:#14161b; border:1px solid #2a2d35; border-radius:10px; padding:12px 14px 6px; margin-bottom:14px;">
-      <div id="trades-chart-legend" style="display:flex; flex-wrap:wrap; gap:14px; margin-bottom:6px; font-size:12px; color:#9aa0a6;"></div>
-      <div id="trades-chart-wrap" style="position:relative; width:100%; overflow:hidden;">
-        <svg id="trades-chart-svg" style="display:block; width:100%;"></svg>
-        <div id="trades-tooltip" style="position:absolute; display:none; pointer-events:none; background:#1f232b; border:1px solid #363b47; border-radius:6px; padding:8px 10px; font-size:12px; line-height:1.5; color:#e6e6e6; box-shadow:0 4px 12px rgba(0,0,0,0.4); z-index:10; white-space:nowrap;"></div>
-      </div>
     </div>
 
     <table id="trades"><thead><tr><th>시각</th><th>전략</th><th>구분</th><th>코인</th><th>매수/매도</th><th>수량</th><th>가격(KRW)</th><th>확신도/베팅비율</th></tr></thead><tbody></tbody></table>
@@ -257,6 +250,86 @@ function showTab(name) {
 }
 
 let lastTradesData = null;  // 마지막으로 받은 d.trades — 필터 select를 바꿀 때 재요청 없이 다시 그리는 데 사용
+let lastFullData = null;    // 마지막으로 받은 전체 응답(d) — 카드를 펼치고 접을 때 재요청 없이 다시 그리는 데 사용
+const expandedCards = new Set();  // 펼쳐진 카드 키("<mode>__<strategy>") 집합. 15초마다 새로고침해도 펼친 상태가 유지되게 한다.
+
+function toggleCardDetail(cardKey) {
+  if (expandedCards.has(cardKey)) expandedCards.delete(cardKey);
+  else expandedCards.add(cardKey);
+  if (!lastFullData) return;
+  renderCards('cards-reset', 'reset');
+  renderCards('cards-cumulative', 'cumulative');
+}
+
+// 전략 카드를 펼쳤을 때 보여줄 "코인별 보유 현황" — 수량 대신 진입가/현재가/
+// 레버리지/평가손익처럼 "지금 얼마에 몇 배로 들어가 있는지"를 바로 읽을 수 있게.
+function renderPositionDetail(slots) {
+  if (!slots.length) return '';
+  const rows = slots.map(s => {
+    let statusLabel, entryPrice, leverageLabel;
+    if (s.position === 'long') {
+      statusLabel = '롱 보유';
+      entryPrice = s.avg_cost_krw;
+      leverageLabel = '1배(현물)';
+    } else if (s.position === 'short') {
+      statusLabel = '숏 보유';
+      entryPrice = s.short_avg_entry_krw;
+      leverageLabel = `${s.leverage.toFixed(0)}배`;
+    } else {
+      statusLabel = '대기 중';
+      entryPrice = null;
+      leverageLabel = '-';
+    }
+    const priceLabel = s.current_price_krw ? `${Math.round(s.current_price_krw).toLocaleString()}원` : '-';
+    const entryLabel = entryPrice ? `${Math.round(entryPrice).toLocaleString()}원` : '-';
+    let pnlLabel = '-';
+    let pnlCls = '';
+    if (s.unrealized_pnl_pct !== null && s.unrealized_pnl_pct !== undefined) {
+      pnlCls = s.unrealized_pnl_pct >= 0 ? 'pnl-pos' : 'pnl-neg';
+      const sign = s.unrealized_pnl_pct >= 0 ? '+' : '';
+      pnlLabel = `${sign}${s.unrealized_pnl_pct.toFixed(1)}% (${sign}${Math.round(s.unrealized_pnl_krw).toLocaleString()}원)`;
+    }
+    return `<tr>
+      <td>${s.coin}</td>
+      <td>${statusLabel}</td>
+      <td>${entryLabel}</td>
+      <td>${priceLabel}</td>
+      <td>${leverageLabel}</td>
+      <td class="${pnlCls}" style="font-size:12px; font-weight:600;">${pnlLabel}</td>
+    </tr>`;
+  }).join('');
+  return `
+    <table style="width:100%; margin-top:10px; font-size:12px; border-top:1px solid #2a2d35; padding-top:8px;" onclick="event.stopPropagation();">
+      <thead><tr style="color:#9aa0a6;"><th style="text-align:left;">코인</th><th style="text-align:left;">상태</th><th style="text-align:left;">진입가(평단)</th><th style="text-align:left;">현재가</th><th style="text-align:left;">레버리지</th><th style="text-align:left;">평가손익</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function renderCards(containerId, mode) {
+  if (!lastFullData) return;
+  const container = document.getElementById(containerId);
+  container.innerHTML = '';
+  const sorted = lastFullData.portfolios.filter(p => p.mode === mode).sort((a,b) => b.pnl_pct - a.pnl_pct);
+  for (const p of sorted) {
+    const cls = p.pnl_pct >= 0 ? 'pnl-pos' : 'pnl-neg';
+    const pnlSign = p.pnl_krw >= 0 ? '+' : '';
+    let resetNote = '';
+    if (mode === 'reset' && p.created_at) {
+      resetNote = `<div style="color:#60a5fa;font-size:11px;margin-top:2px;">이번 주기 시작: ${p.created_at.slice(0,10)}</div>`;
+    }
+    const cardKey = `${mode}__${p.strategy}`;
+    const isOpen = expandedCards.has(cardKey);
+    container.innerHTML += `
+      <div class="card" onclick="toggleCardDetail('${cardKey}')" style="cursor:pointer;">
+        <h3>${p.strategy} <span style="float:right; color:#5b6472; font-size:11px;">${isOpen ? '▲ 접기' : '▼ 코인별 현황'}</span></h3>
+        <div class="${cls}">${p.pnl_pct >= 0 ? '+' : ''}${p.pnl_pct.toFixed(2)}%</div>
+        <div class="${cls}" style="font-size:14px;margin-top:2px;">${pnlSign}${Math.round(p.pnl_krw).toLocaleString()}원</div>
+        <div style="color:#9aa0a6;font-size:12px;margin-top:4px;">평가액 ${Math.round(p.total_value_krw).toLocaleString()}원 (원금 ${Math.round(p.initial_capital_krw).toLocaleString()}원) · 거래 ${p.trade_count}건</div>
+        ${resetNote}
+        <div style="display:${isOpen ? 'block' : 'none'};">${renderPositionDetail(p.slots || [])}</div>
+      </div>`;
+  }
+}
 
 function resetTradeFilters() {
   document.getElementById('filter-strategy').value = '';
@@ -295,8 +368,6 @@ function renderTrades() {
   document.getElementById('trades-count').innerText =
     `(최근 ${lastTradesData.length}건 중 ${filtered.length}건 표시)`;
 
-  renderTradesChart(filtered);
-
   const tbody = document.querySelector('#trades tbody');
   tbody.innerHTML = '';
   for (const t of filtered) {
@@ -321,174 +392,6 @@ function renderTrades() {
       <td style="color:var(--text-secondary, #9aa0a6);font-size:12px;">${confCell}</td>
     </tr>`;
   }
-}
-
-// ---- 거래 타임라인 차트 ----
-// 표만으로는 거래가 "언제 몰렸는지/어떤 코인에 집중됐는지" 한눈에 안 들어와서
-// 추가한 시간축 산점도. 코인별로 레인을 나누고, 매매 종류(side)를 색+모양으로
-// 구분한다. 산점도류 차트는 모든 점끼리 색이 구분돼야 해서 안전하게 쓸 수 있는
-// 색이 3개뿐이라(디자인 가이드의 scatter 색상 캡), 색은 "롱/숏/강제청산" 3그룹에만
-// 쓰고 그 안의 세부 구분(매수vs매도 등)은 모양(화살표/다이아몬드/X)으로 더한다.
-const CHART_COINS = ["BTC", "ETH", "XRP", "SOL", "DOGE", "ADA"];
-const SIDE_META = {
-  BUY:              { color: '#3987e5', shape: 'tri-up',       label: '매수 (롱 진입)' },
-  SELL:             { color: '#3987e5', shape: 'tri-down',     label: '매도 (롱 청산)' },
-  SHORT_OPEN:       { color: '#199e70', shape: 'diamond',      label: '숏 진입' },
-  SHORT_CLOSE:      { color: '#199e70', shape: 'diamond-open', label: '숏 청산' },
-  LONG_LIQUIDATED:  { color: '#d03b3b', shape: 'x',            label: '강제청산 (롱)' },
-  SHORT_LIQUIDATED: { color: '#d03b3b', shape: 'x',            label: '강제청산 (숏)' },
-};
-const CHART_LEGEND = [
-  { color: '#3987e5', shape: 'tri-up',       text: '매수(롱 진입)' },
-  { color: '#3987e5', shape: 'tri-down',     text: '매도(롱 청산)' },
-  { color: '#199e70', shape: 'diamond',      text: '숏 진입' },
-  { color: '#199e70', shape: 'diamond-open', text: '숏 청산' },
-  { color: '#d03b3b', shape: 'x',            text: '강제청산' },
-];
-
-function tradeShapeMarkup(shape, color, s) {
-  if (shape === 'tri-up') return `<path d="M0,-${s} L${s},${s*0.85} L${-s},${s*0.85} Z" fill="${color}" stroke="#0f1115" stroke-width="1.5"/>`;
-  if (shape === 'tri-down') return `<path d="M0,${s} L${s},${-s*0.85} L${-s},${-s*0.85} Z" fill="${color}" stroke="#0f1115" stroke-width="1.5"/>`;
-  if (shape === 'diamond') return `<path d="M0,${-s} L${s},0 L0,${s} L${-s},0 Z" fill="${color}" stroke="#0f1115" stroke-width="1.5"/>`;
-  if (shape === 'diamond-open') return `<path d="M0,${-s} L${s},0 L0,${s} L${-s},0 Z" fill="none" stroke="${color}" stroke-width="2"/>`;
-  if (shape === 'x') return `<path d="M${-s},${-s} L${s},${s} M${-s},${s} L${s},${-s}" stroke="${color}" stroke-width="2.5" stroke-linecap="round" fill="none"/>`;
-  return '';
-}
-
-function renderTradesLegendOnce() {
-  const el = document.getElementById('trades-chart-legend');
-  if (el.dataset.built) return;  // 고정 범례라 한 번만 그리면 된다
-  el.innerHTML = CHART_LEGEND.map(it => `
-    <span style="display:inline-flex; align-items:center; gap:5px;">
-      <svg width="14" height="14" viewBox="-7 -7 14 14">${tradeShapeMarkup(it.shape, it.color, 5)}</svg>${it.text}
-    </span>`).join('');
-  el.dataset.built = '1';
-}
-
-function renderTradesChart(points) {
-  renderTradesLegendOnce();
-  const wrap = document.getElementById('trades-chart-wrap');
-  const svg = document.getElementById('trades-chart-svg');
-  const tooltip = document.getElementById('trades-tooltip');
-  const width = Math.max(wrap.clientWidth || 0, 320);
-  const margin = { top: 10, right: 16, bottom: 26, left: 54 };
-  const laneH = 40;
-  const plotH = CHART_COINS.length * laneH;
-  const height = margin.top + plotH + margin.bottom;
-  svg.setAttribute('width', width);
-  svg.setAttribute('height', height);
-  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
-
-  if (!points.length) {
-    svg.innerHTML = `<text x="${width/2}" y="${height/2}" fill="#9aa0a6" font-size="13" text-anchor="middle">표시할 거래가 없습니다</text>`;
-    tooltip.style.display = 'none';
-    window.__chartPoints = [];
-    return;
-  }
-
-  const times = points.map(p => new Date(p.timestamp).getTime());
-  let tMin = Math.min(...times), tMax = Math.max(...times);
-  if (tMin === tMax) { tMin -= 60000; tMax += 60000; }
-  const x0 = margin.left, x1 = width - margin.right;
-  const xScale = t => x0 + (t - tMin) / (tMax - tMin) * (x1 - x0);
-
-  const parts = [];
-  // 코인별 레인 구분선 + 라벨 (축의 카테고리 = 코인)
-  CHART_COINS.forEach((coin, i) => {
-    const yTop = margin.top + i * laneH;
-    const yMid = yTop + laneH / 2;
-    parts.push(`<line x1="${x0}" y1="${yTop}" x2="${x1}" y2="${yTop}" stroke="#23262e" stroke-width="1"/>`);
-    parts.push(`<text x="${margin.left - 10}" y="${yMid}" fill="#9aa0a6" font-size="11" text-anchor="end" dominant-baseline="middle">${coin}</text>`);
-  });
-  parts.push(`<line x1="${x0}" y1="${margin.top + plotH}" x2="${x1}" y2="${margin.top + plotH}" stroke="#23262e" stroke-width="1"/>`);
-
-  // x축 (시간) 눈금 5개 — 하나의 축만 쓴다(이중 y축 금지 원칙과 같은 이유로, 시간 축도 하나만)
-  const tickCount = 5;
-  const spanMs = tMax - tMin;
-  const useDate = spanMs > 20 * 3600 * 1000;  // 20시간 넘게 걸쳐 있으면 날짜도 같이 표시
-  for (let k = 0; k <= tickCount; k++) {
-    const t = tMin + (spanMs * k) / tickCount;
-    const d = new Date(t);
-    const hh = String(d.getHours()).padStart(2, '0');
-    const mm = String(d.getMinutes()).padStart(2, '0');
-    const label = useDate
-      ? `${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')} ${hh}:${mm}`
-      : `${hh}:${mm}`;
-    const xt = xScale(t);
-    parts.push(`<line x1="${xt}" y1="${margin.top}" x2="${xt}" y2="${margin.top + plotH}" stroke="#1c1f26" stroke-width="1"/>`);
-    parts.push(`<text x="${xt}" y="${height - 8}" fill="#898781" font-size="10" text-anchor="middle">${label}</text>`);
-  }
-
-  // 거래 포인트 — 각 점에 24px짜리 투명 히트영역(hit target)을 같이 둬서
-  // 작은 모양(마커) 위에 정확히 올리지 않아도 호버/툴팁이 걸리게 한다.
-  points.forEach((p, i) => {
-    const meta = SIDE_META[p.side] || { color: '#9aa0a6', shape: 'diamond' };
-    const coinIdx = CHART_COINS.indexOf(p.coin);
-    const laneIdx = coinIdx >= 0 ? coinIdx : CHART_COINS.length - 1;
-    const cx = xScale(new Date(p.timestamp).getTime());
-    const cy = margin.top + laneIdx * laneH + laneH / 2;
-    parts.push(`<g class="trade-point" data-i="${i}" transform="translate(${cx},${cy})" style="cursor:pointer;">`
-      + `<circle r="12" fill="transparent"/>`
-      + tradeShapeMarkup(meta.shape, meta.color, 6)
-      + `</g>`);
-  });
-
-  svg.innerHTML = parts.join('');
-  window.__chartPoints = points;
-
-  // 포인트마다 리스너를 달지 않고 svg 하나에 위임 — 200개 점이어도 리스너는 1개.
-  if (!svg.dataset.wired) {
-    svg.addEventListener('pointermove', onTradesChartHover);
-    svg.addEventListener('pointerleave', () => { tooltip.style.display = 'none'; });
-    svg.dataset.wired = '1';
-  }
-}
-
-function onTradesChartHover(ev) {
-  const tooltip = document.getElementById('trades-tooltip');
-  const g = ev.target.closest('.trade-point');
-  if (!g) { tooltip.style.display = 'none'; return; }
-  const p = (window.__chartPoints || [])[parseInt(g.dataset.i, 10)];
-  if (!p) { tooltip.style.display = 'none'; return; }
-  const meta = SIDE_META[p.side] || { label: p.side };
-  const modeLabel = p.mode === 'reset' ? '리셋' : '누적';
-
-  // 거래 데이터(전략명/이유 등)는 신뢰할 수 없는 문자열일 수 있으니 textContent로만 넣는다.
-  tooltip.innerHTML = '';
-  const title = document.createElement('div');
-  title.style.fontWeight = '600';
-  title.style.marginBottom = '3px';
-  title.textContent = meta.label || p.side;
-  tooltip.appendChild(title);
-  [
-    p.timestamp.slice(0, 19).replace('T', ' '),
-    `${p.coin} · ${p.strategy} (${modeLabel})`,
-    `수량 ${p.qty.toFixed(4)} · 가격 ${Math.round(p.price_krw).toLocaleString()}원`,
-  ].forEach(line => {
-    const row = document.createElement('div');
-    row.textContent = line;
-    tooltip.appendChild(row);
-  });
-  if (p.reason) {
-    const reasonRow = document.createElement('div');
-    reasonRow.style.color = '#9aa0a6';
-    reasonRow.style.marginTop = '3px';
-    reasonRow.textContent = p.reason;
-    tooltip.appendChild(reasonRow);
-  }
-
-  const wrap = document.getElementById('trades-chart-wrap');
-  const wrapRect = wrap.getBoundingClientRect();
-  tooltip.style.left = '0px';
-  tooltip.style.top = '0px';
-  tooltip.style.display = 'block';
-  const tw = tooltip.offsetWidth, th = tooltip.offsetHeight;
-  let left = ev.clientX - wrapRect.left + 14;
-  let top = ev.clientY - wrapRect.top - th - 10;
-  if (left + tw > wrap.clientWidth) left = ev.clientX - wrapRect.left - tw - 14;
-  if (top < 0) top = ev.clientY - wrapRect.top + 14;
-  tooltip.style.left = left + 'px';
-  tooltip.style.top = top + 'px';
 }
 
 const ROLE_ORDER = ['strategy', 'lstm', 'execution', 'storage', 'risk', 'synthesizer'];
@@ -669,27 +572,7 @@ async function load() {
     `[${stageLabel}] ${p.detail || ''}` + (ageLabel ? ` (${ageLabel})` : '') +
     (staleWarning ? ' ⚠ 응답 없음 — 멈췄을 수 있음 (watchdog 사용 시 자동 재시작됨)' : '');
 
-  function renderCards(containerId, mode) {
-    const container = document.getElementById(containerId);
-    container.innerHTML = '';
-    const sorted = d.portfolios.filter(p => p.mode === mode).sort((a,b) => b.pnl_pct - a.pnl_pct);
-    for (const p of sorted) {
-      const cls = p.pnl_pct >= 0 ? 'pnl-pos' : 'pnl-neg';
-      const pnlSign = p.pnl_krw >= 0 ? '+' : '';
-      let resetNote = '';
-      if (mode === 'reset' && p.created_at) {
-        resetNote = `<div style="color:#60a5fa;font-size:11px;margin-top:2px;">이번 주기 시작: ${p.created_at.slice(0,10)}</div>`;
-      }
-      container.innerHTML += `
-        <div class="card">
-          <h3>${p.strategy}</h3>
-          <div class="${cls}">${p.pnl_pct >= 0 ? '+' : ''}${p.pnl_pct.toFixed(2)}%</div>
-          <div class="${cls}" style="font-size:14px;margin-top:2px;">${pnlSign}${Math.round(p.pnl_krw).toLocaleString()}원</div>
-          <div style="color:#9aa0a6;font-size:12px;margin-top:4px;">평가액 ${Math.round(p.total_value_krw).toLocaleString()}원 (원금 ${Math.round(p.initial_capital_krw).toLocaleString()}원) · 거래 ${p.trade_count}건</div>
-          ${resetNote}
-        </div>`;
-    }
-  }
+  lastFullData = d;
   renderCards('cards-reset', 'reset');
   renderCards('cards-cumulative', 'cumulative');
 
@@ -783,9 +666,47 @@ def api_data():
             # 예상 밖의 키는 기존과 동일하게 (name, "cumulative")로 폴백한다 —
             # analysis_team 리포트 2026-11-16_1619_storage.md).
             strategy, mode = storage.parse_portfolio_key(name)
-            total = sum(s["cash_krw"] + s["qty"] * prices.get(c, 0) for c, s in doc["slots"].items())
+            # Portfolio.total_value_krw()를 그대로 재사용한다 — 예전엔 여기서
+            # "cash_krw + qty*price"만 직접 더해서 숏 포지션의 마진/미실현손익이
+            # 총 평가액에서 통째로 빠져있었다(숏을 들고 있는 전략의 pnl%가 실제보다
+            # 낮게 보이는 버그). portfolio.py의 공식 계산식 하나로 통일한다.
+            pf = portfolio.Portfolio.from_doc(doc)
+            total = pf.total_value_krw(prices)
             initial = doc["initial_capital_krw"]
             pnl = (total / initial - 1.0) * 100
+
+            slots = []
+            for coin, s in doc["slots"].items():
+                price = prices.get(coin)
+                has_long = s["qty"] > 0
+                has_short = s["short_qty"] > 0
+                if has_long:
+                    position = "long"
+                    unreal_pnl_krw = s["qty"] * (price - s["avg_cost_krw"]) if price else None
+                    unreal_pnl_pct = ((price / s["avg_cost_krw"]) - 1.0) * 100 if price and s["avg_cost_krw"] else None
+                elif has_short:
+                    position = "short"
+                    unreal_pnl_krw = (s["short_avg_entry_krw"] - price) * s["short_qty"] if price else None
+                    unreal_pnl_pct = ((s["short_avg_entry_krw"] / price) - 1.0) * 100 if price and s["short_avg_entry_krw"] else None
+                else:
+                    position = "none"
+                    unreal_pnl_krw = None
+                    unreal_pnl_pct = None
+                slots.append({
+                    "coin": coin,
+                    "position": position,
+                    "qty": s["qty"],
+                    "avg_cost_krw": s["avg_cost_krw"],
+                    "short_qty": s["short_qty"],
+                    "short_avg_entry_krw": s["short_avg_entry_krw"],
+                    "short_margin_krw": s["short_margin_krw"],
+                    "cash_krw": s["cash_krw"],
+                    "current_price_krw": price,
+                    "leverage": portfolio.LEVERAGE if has_short else None,
+                    "unrealized_pnl_krw": unreal_pnl_krw,
+                    "unrealized_pnl_pct": unreal_pnl_pct,
+                })
+
             portfolios.append({
                 "strategy": strategy,
                 "mode": mode,
@@ -795,6 +716,7 @@ def api_data():
                 "pnl_pct": pnl,
                 "trade_count": doc.get("trade_count", 0),
                 "created_at": doc.get("created_at"),
+                "slots": slots,
             })
 
         trades = storage.recent_trades(conn, limit=200)
