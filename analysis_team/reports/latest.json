@@ -1,47 +1,47 @@
 {
-  "generated_at": "2026-11-22_1326",
+  "generated_at": "2026-11-22_1418",
   "roles": {
     "execution": {
       "role": "execution",
       "role_label": "실행/버그 분석가",
-      "timestamp": "2026-11-22_1326",
-      "path": "analysis_team/reports/2026-11-22_1326_execution.md",
-      "summary": "예외처리·사이클 타이밍·Upbit API 호출 패턴은 이미 상당히 촘촘하게 보강되어 있어 큰 문제는 없고, 새로 찾은 점은 LSTM 추론 중복 계산 1건과 로그 메시지 정확도 1건 정도의 경미한 수준이다."
+      "timestamp": "2026-11-22_1418",
+      "path": "analysis_team/reports/2026-11-22_1418_execution.md",
+      "summary": "Upbit API 호출 패턴·사이클 60초 타이밍·예외 격리는 이미 촘촘하게 보강되어 있고, 새로 확인한 핵심 이슈는 data_fetcher.py의 \"강제 전체 재수집(force_full)\" 마커가 부분 성공만으로도 \"완료\"로 기록되는 1건이며, 부가로 main_loop.py의 LSTM"
     },
     "lstm": {
       "role": "lstm",
       "role_label": "LSTM 분석가",
-      "timestamp": "2026-11-22_1326",
-      "path": "analysis_team/reports/2026-11-22_1326_lstm.md",
-      "summary": "피처/모델 구조와 파인튠 lr/체인-리셋 설계는 데이터 규모와 \"방향성 예측\"이라는 과제 난이도에 비춰 전반적으로 합리적이나, \"가중치 고착 방지용 전체 재학습\" 직후에는 성능 롤백 안전장치가 빠져 있어 주기적으로 안전망 없는 모델 교체가 발생할 수 있다."
+      "timestamp": "2026-11-22_1418",
+      "path": "analysis_team/reports/2026-11-22_1418_lstm.md",
+      "summary": "피처 구성·모델 크기·파인튠 lr/체인-리셋 설계는 \"1분봉 방향성 예측\"이라는 과제 난이도와 데이터 규모에 비춰 전반적으로 합리적이지만, \"가중치 고착 방지용 전체 재학습\" 전환 시점에만 val_acc 롤백 안전장치가 빠져 있어 코인당 약 3일 주기로 안전망 없는 모델 교체가 일어날 "
     },
     "risk": {
       "role": "risk",
       "role_label": "리스크 분석가",
-      "timestamp": "2026-11-22_1326",
-      "path": "analysis_team/reports/2026-11-22_1326_risk.md",
-      "summary": "레버리지/숏/수수료 구조 자체는 안전마진(손절 8% < 강제청산 33.3%)이 잘 설계되어 있고, 이전에 지적된 물타기형 손절 기준 문제도 `first_entry_price_krw` 도입으로 이미 해소되었습니다. 다만 코인별 동일 비중·동일 레버리지·동일 손절% 적용이 BTC와 DOGE"
+      "timestamp": "2026-11-22_1418",
+      "path": "analysis_team/reports/2026-11-22_1418_risk.md",
+      "summary": "숏 레버리지 배팅 비율 로직과 코인 간 동일 리스크 배분 두 곳에서 실질적인 리스크 불균형이 남아 있다(물타기형 손절 문제는 `first_entry_price_krw`로 이미 잘 해소됨)."
     },
     "storage": {
       "role": "storage",
       "role_label": "데이터/저장소 분석가",
-      "timestamp": "2026-11-22_1326",
-      "path": "analysis_team/reports/2026-11-22_1326_storage.md",
-      "summary": "최근 라운드들에서 인덱스/보관주기/동시성 이슈가 이미 상당히 잘 정리되었고, storage.py 설계 자체는 현재 안정적입니다. 다만 `model_training_history()`를 쓰는 대시보드 쪽에 `prediction_accuracy_by_coin()`에서 이미 해결했던 것과 동"
+      "timestamp": "2026-11-22_1418",
+      "path": "analysis_team/reports/2026-11-22_1418_storage.md",
+      "summary": "스키마/인덱스/보관주기/동시성/포트폴리오 키 설계는 이전 여러 차례 분석 라운드를 거쳐 이미 상당히 잘 정리되어 있고, 남아있는 실질적 문제는 `dashboard.py`가 `model_training_history()`를 코인별로 반복 호출하는 N+1 쿼리 패턴 하나뿐이다."
     },
     "strategy": {
       "role": "strategy",
       "role_label": "전략 분석가",
-      "timestamp": "2026-11-22_1326",
-      "path": "analysis_team/reports/2026-11-22_1326_strategy.md",
-      "summary": "4개 전략의 코드 자체는 로직 버그 없이 깨끗하지만, 추세추종형 3종(ma_cross_rsi, macd_momentum, trend_follow)이 구조적으로 겹치고, 네 전략 모두 거래량을 전혀 참조하지 않아 급등락/거래량 바닥 구간에서 안전장치가 없다는 점이 가장 큰 리스크입니다."
+      "timestamp": "2026-11-22_1418",
+      "path": "analysis_team/reports/2026-11-22_1418_strategy.md",
+      "summary": "RSI 0/0 분기처리 등 과거 이슈는 이미 해결돼 있으나, \"4개 전략\" 중 2개(ma_cross_rsi, macd_momentum)가 구조적으로 거의 같은 신호를 내고, OHLCV 중 volume이 전략 전체에서 단 한 번도 쓰이지 않는 점이 남아있는 핵심 이슈다."
     },
     "synthesizer": {
       "role": "synthesizer",
       "role_label": "종합 조정자",
-      "timestamp": "2026-11-22_1326",
-      "path": "analysis_team/reports/2026-11-22_1326_synthesizer.md",
-      "summary": "**1. (storage) dashboard.py의 코인별 학습기록 N+1 조회 제거**"
+      "timestamp": "2026-11-22_1418",
+      "path": "analysis_team/reports/2026-11-22_1418_synthesizer.md",
+      "summary": "**1. LSTM 전체 재학습 롤백 안전장치 복구** (lstm_model.py 245, 256행)"
     }
   }
 }
