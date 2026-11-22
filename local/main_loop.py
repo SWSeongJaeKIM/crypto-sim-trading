@@ -723,6 +723,16 @@ def main():
             # 재학습 동안 run_one_cycle()이 동기적으로 멈추는 공백 구간의 실제 길이를
             # run.log에서 가늠할 수 있도록 소요 시간을 기록한다.
             # (analysis_team 리포트 2026-11-16_1521_execution.md)
+            #
+            # 이 블록이 끝나기 전까지(아래 retrain_lstm() 동기 호출 동안)
+            # run_one_cycle()의 손절/강제청산 체크(476번째 줄 근처)도 함께
+            # 멈춘다는 사실은 기존에는 종료 시점 소요시간 로그(아래 742번째
+            # 줄)에만 간접적으로 드러났다. 시작 시점에도 명시적으로 남겨
+            # 두 로그가 시작/종료 한 쌍을 이루게 한다. 순수 로깅이라 매매
+            # 로직에는 영향 없음 (analysis_team execution 리포트
+            # 2026-11-22_0818 발견점 #1/구체적 제안, synthesizer Top3 #2).
+            log.info("LSTM 재학습 시작 — 완료까지 매매 신호 계산 및 손절/강제청산 체크가 "
+                     "일시 중단됩니다 (예상 수분~수십분).")
             _retrain_started = time.monotonic()
             _in_retrain = True
             try:
