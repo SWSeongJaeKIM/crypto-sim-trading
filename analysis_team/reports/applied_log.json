@@ -2454,5 +2454,61 @@
     "decision": "skipped",
     "reason": "손절 기준이라는 매매 핵심 판단을 코인별로 다르게 바꾸는 제안이며, 리포트 자체가 '변동성 기준값(ATR 등) 산출 로직 추가 필요'와 '백테스트 없이 값을 임의로 정하면 역효과가 날 수 있다'는 트레이드오프를 명시함(판단 기준 5번). 2026-11-16/2026-11-22 여러 회차에 걸쳐 동일 제안이 같은 이유로 반복 보류되어온 사안으로 이번에도 변동 없음.",
     "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_2018",
+    "proposal": "data_fetcher.py:223 캔들 상한 클램프 로그를 log.debug에서 log.warning으로 승격 (정상 방어 동작임을 메시지에 명시)",
+    "role": "execution (synthesizer Top3 #1)",
+    "decision": "applied",
+    "reason": "main_loop.py가 루트 로거를 INFO로 고정하기 때문에 log.debug가 실제로는 전혀 출력되지 않아, SEQ_LEN 확장 시 원인 추적용 안전장치가 무력화된 상태였음. 코드 1줄 레벨 변경으로 리스크가 거의 없고 버그 수정(판단 기준 1번)에 해당. 메시지에 '정상 방어 동작, 참고용'을 덧붙여 리포트가 지적한 오인 경보 우려도 함께 해소함. py_compile + 루트 로거를 INFO로 설정한 모의 실행으로 WARNING 레벨 출력이 실제로 찍히는지 검증함.",
+    "commit": "14a3a3954bd99a592e96d1e22cb067bc7deb8f70"
+  },
+  {
+    "timestamp": "2026-11-22_2018",
+    "proposal": "storage.prune_slot_values(conn, keep_days=90) 추가 + main_loop.py 기존 prune 블록에 호출 추가 — slot_values 테이블 보관주기 신설",
+    "role": "storage (synthesizer Top3 #2)",
+    "decision": "applied",
+    "reason": "predictions/snapshots/model_trainings는 이미 보관주기가 있는데 slot_values만 빠져 있던 비일관성 해소(버그성 공백, 판단 기준 1번). 이 테이블은 dashboard.py/storage.py 어디서도 읽지 않는 순수 진단용 시계열이라 삭제해도 매매 판단에 영향 없음(기존 동작을 깨뜨릴 위험 낮음, 판단 기준 3번). prune_model_trainings와 동일한 패턴을 그대로 따름. 임시 sqlite db에 200일 전/1일 전 행을 넣고 prune_slot_values(keep_days=90) 실행 후 오래된 행만 삭제되고 최근 행은 남는지 시뮬레이션으로 검증함.",
+    "commit": "23d27f1134e07018f02c66fea1b31e40a7258864"
+  },
+  {
+    "timestamp": "2026-11-22_2018",
+    "proposal": "strategies.py 4개 전략(ma_cross_rsi/bollinger_rsi/macd_momentum/trend_follow) signal() 공통 거래량 필터 volume_floor_ok(df, lookback=20, min_ratio=0.3) 추가 — 저유동성 구간 신호 필터링",
+    "role": "strategy (synthesizer Top3 #3)",
+    "decision": "skipped",
+    "reason": "진입/청산 조건 자체를 바꾸는 매매 핵심 판단 변경(판단 기준 2번)이며, strategy 리포트 본문이 'min_ratio 값은 반드시 trading.db 운영 데이터로 백테스트 검증이 필요'라고 명시하고 리스크/트레이드오프 섹션에서도 '실제 효과는 운영 데이터 기반 백테스트로만 검증 가능하며, 이 분석만으로는 판단 불가'라고 스스로 밝힘. 코드 리뷰만으로 효과가 명백히 검증되는 경우가 아니므로 반영하지 않음 — 사람이 백테스트 후 직접 판단 필요.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_2018",
+    "proposal": "bollinger_rsi에 추세 필터(SMA50 기울기 기반 confidence 패널티)를 추가해 급등락 구간 역방향 신호 완화",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "confidence 스케일 조정이지만 결과적으로 베팅 크기(돈의 움직임)에 영향을 주는 매매 핵심 판단 변경(판단 기준 2번)이고, 리포트 스스로 '실제 반등 구간에서도 확신도를 낮춰 베팅 크기를 과도하게 줄일 수 있다'는 트레이드오프와 '백테스트로만 검증 가능'이라는 한계를 명시함. 반영하지 않음.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_2018",
+    "proposal": "lstm_model.py build_features()에 BTC 동시점 수익률(btc_ret) 피처 추가 — 코인 간 동조화 신호 반영",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "입력 차원이 바뀌어 기존 저장된 가중치({coin}_lstm.pt)와 shape이 불일치하므로 해당 코인들에 대해 finetune=False(전체 재학습)를 강제해야 하고, 전환 당일 예측 품질이 일시적으로 흔들릴 수 있다고 리포트가 직접 경고함 — 기존 동작을 깨뜨릴 위험이 낮지 않음(판단 기준 3번 위반). 또한 효과는 모델 예측 품질(결과적으로 매매 판단)에 영향을 주는데 이것이 실제로 개선인지는 운영 데이터 없이 코드 리뷰만으로 명백히 검증할 수 없음(판단 기준 2번). 반영하지 않음.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_2018",
+    "proposal": "lstm_model.py train_model()의 loss_fn을 reduction='none'으로 바꿔 recency weighting(최근 7일 가중 2배) 적용 — 파인튠 시 최근 패턴 반영 강화",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "모델 학습 방식을 바꿔 결과적으로 매매 판단에 쓰이는 예측 확률에 영향을 주는 변경이며, 리포트 스스로 '최근 며칠이 비정상적으로 변동성이 크면 그 노이즈에 과적합될 위험'이 있고 'VAL_ACC_ROLLBACK_THRESHOLD 안전망이 더 자주 작동하도록 모니터링 필요'라고 명시함. 효과(과적합 여부)가 실제 운영 데이터를 지켜봐야 판단 가능한 사안이라 코드 리뷰만으로 명백히 검증되지 않음(판단 기준 2번). 반영하지 않음 — 다음에 사람이 직접 판단.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_2018",
+    "proposal": "main_loop.py에 COIN_RISK_WEIGHT 딕셔너리(코인별 0.5~1.0 가중치)를 추가해 confidence_to_trade_fraction() 결과에 곱해 코인별 변동성 차이를 베팅 비율에 반영",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "베팅 비율(얼마만큼의 돈을 움직이는지)을 코인별로 차등화하는 매매 핵심 판단 변경(판단 기준 2번)이며, 리포트 스스로 '가중치 선정에 주관이 들어가 과최적화 위험'과 '반영 전 과거 1분봉 데이터로 백테스트하여 실제로 리스크가 고르게 분산되는지 확인하는 과정이 필요 — 이는 실제 운영 데이터를 봐야 검증 가능하며 코드 분석만으로는 효과를 단정할 수 없다'고 명시함. 반영하지 않음.",
+    "commit": null
   }
 ]
