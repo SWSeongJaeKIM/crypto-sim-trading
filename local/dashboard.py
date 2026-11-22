@@ -676,18 +676,23 @@ def api_data():
             pnl = (total / initial - 1.0) * 100
 
             slots = []
-            for coin, s in doc["slots"].items():
+            # doc["slots"]의 원본 dict를 직접 읽지 않고 pf.slots(=CoinSlot 객체)를 쓴다.
+            # 숏 관련 필드(short_qty 등)가 나중에 추가된 거라, 그 전에 저장된 실제
+            # 운영 DB의 옛 포트폴리오 문서에는 이 키들이 아예 없을 수 있다 — dict를
+            # 직접 인덱싱하면 KeyError가 나지만, CoinSlot 데이터클래스는 기본값
+            # (0.0)이 있어서 Portfolio.from_doc()을 거치면 안전하게 채워진다.
+            for coin, s in pf.slots.items():
                 price = prices.get(coin)
-                has_long = s["qty"] > 0
-                has_short = s["short_qty"] > 0
+                has_long = s.qty > 0
+                has_short = s.short_qty > 0
                 if has_long:
                     position = "long"
-                    unreal_pnl_krw = s["qty"] * (price - s["avg_cost_krw"]) if price else None
-                    unreal_pnl_pct = ((price / s["avg_cost_krw"]) - 1.0) * 100 if price and s["avg_cost_krw"] else None
+                    unreal_pnl_krw = s.qty * (price - s.avg_cost_krw) if price else None
+                    unreal_pnl_pct = ((price / s.avg_cost_krw) - 1.0) * 100 if price and s.avg_cost_krw else None
                 elif has_short:
                     position = "short"
-                    unreal_pnl_krw = (s["short_avg_entry_krw"] - price) * s["short_qty"] if price else None
-                    unreal_pnl_pct = ((s["short_avg_entry_krw"] / price) - 1.0) * 100 if price and s["short_avg_entry_krw"] else None
+                    unreal_pnl_krw = (s.short_avg_entry_krw - price) * s.short_qty if price else None
+                    unreal_pnl_pct = ((s.short_avg_entry_krw / price) - 1.0) * 100 if price and s.short_avg_entry_krw else None
                 else:
                     position = "none"
                     unreal_pnl_krw = None
@@ -695,12 +700,12 @@ def api_data():
                 slots.append({
                     "coin": coin,
                     "position": position,
-                    "qty": s["qty"],
-                    "avg_cost_krw": s["avg_cost_krw"],
-                    "short_qty": s["short_qty"],
-                    "short_avg_entry_krw": s["short_avg_entry_krw"],
-                    "short_margin_krw": s["short_margin_krw"],
-                    "cash_krw": s["cash_krw"],
+                    "qty": s.qty,
+                    "avg_cost_krw": s.avg_cost_krw,
+                    "short_qty": s.short_qty,
+                    "short_avg_entry_krw": s.short_avg_entry_krw,
+                    "short_margin_krw": s.short_margin_krw,
+                    "cash_krw": s.cash_krw,
                     "current_price_krw": price,
                     "leverage": portfolio.LEVERAGE if has_short else None,
                     "unrealized_pnl_krw": unreal_pnl_krw,
