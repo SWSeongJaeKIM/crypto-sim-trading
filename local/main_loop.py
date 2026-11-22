@@ -472,7 +472,13 @@ def run_one_cycle(conn) -> None:
                     price = prices_krw[coin]
 
                     if strat_name == "lstm_predictor":
-                        prob_up = lstm_model.predict_proba(coin, df)
+                        # 바로 위 signal_with_confidence(df)가 이미 이 코인에 대해
+                        # predict_proba를 호출해 strat.last_prob_up에 남겨뒀다 —
+                        # 같은 df로 다시 호출하면 특징생성+forward pass가 코인당
+                        # 매 사이클 중복 실행되므로, 재호출 대신 캐싱된 값을
+                        # 쓴다 (analysis_team execution 리포트 2026-11-22_1418/1326,
+                        # synthesizer Top3 #3).
+                        prob_up = strat.last_prob_up
                         if prob_up is not None:
                             storage.add_prediction(conn, coin, now, prob_up, price)
                 except FileNotFoundError as e:

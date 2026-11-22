@@ -381,6 +381,15 @@ class LSTMStrategy:
     def __init__(self, coin: str, **params):
         self.coin = coin
         self.params = params
+        # signal()/signal_with_confidence()가 마지막으로 계산한 prob_up을
+        # 캐싱해둔다. main_loop.py가 매 사이클 같은 df로 예측 기록 저장용
+        # predict_proba를 또 호출해 특징생성+forward pass가 코인당 두 번
+        # 실행되던 중복을 없애기 위함 (analysis_team execution 리포트
+        # 2026-11-22_1418/1326, synthesizer Top3 #3). signal_with_confidence가
+        # 코인 하나를 처리한 직후(main_loop.py의 같은 코인 루프 반복 안에서)
+        # 바로 읽어가는 용도이므로, 다음 코인으로 넘어가 다시 쓰이기 전까지만
+        # 유효하다고 가정한다.
+        self.last_prob_up: float | None = None
 
     def min_bars(self) -> int:
         return SEQ_LEN + 1
@@ -389,6 +398,7 @@ class LSTMStrategy:
         if len(df) < self.min_bars():
             return "HOLD"
         prob_up = predict_proba(self.coin, df)
+        self.last_prob_up = prob_up
         if prob_up is None:
             return "HOLD"  # 아직 학습된 모델 없음
         if prob_up >= PROB_BUY_MIN:
@@ -405,6 +415,7 @@ class LSTMStrategy:
         if len(df) < self.min_bars():
             return "HOLD", 0.0
         prob_up = predict_proba(self.coin, df)
+        self.last_prob_up = prob_up
         if prob_up is None:
             return "HOLD", 0.0
         if prob_up >= PROB_BUY_MIN:
