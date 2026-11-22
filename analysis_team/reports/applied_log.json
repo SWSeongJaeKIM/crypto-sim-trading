@@ -1334,5 +1334,93 @@
     "decision": "skipped",
     "reason": "위에서 strategy의 기간 단축 제안과 risk의 MAX_TRADE_FRACTION/STOP_LOSS_PCT 조정 제안을 모두 개별적으로 검토해 둘 다 매매 핵심 판단 변경으로 반영하지 않기로 했으므로, 실제로 두 방향 중 하나를 선택해야 하는 충돌 상황 자체가 이번 회차에는 발생하지 않음. 다음에 사람이 실제 운영 데이터(거래 빈도, 승률, 수수료 부담)를 보고 어느 방향이 맞는지 직접 판단해야 함.",
     "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0517",
+    "proposal": "data_fetcher._http_get_json의 except 튜플에 ConnectionError(ConnectionResetError/BrokenPipeError)와 http.client.HTTPException(IncompleteRead/RemoteDisconnected) 추가 — 응답 수신 중 연결 끊김이 재시도/부분데이터 보존 로직을 조용히 우회하던 문제 수정",
+    "role": "execution",
+    "decision": "applied",
+    "reason": "synthesizer Top3 #1. 기존 except 범위를 확장하는 것뿐이라 다른 예외를 잘못 삼킬 위험이 거의 없고, 효과(재시도/부분데이터 보존 로직이 이 네트워크 오류 종류에서도 동작)가 코드 리뷰만으로 명백히 검증 가능. 격리된 환경에서 ConnectionResetError/BrokenPipeError/IncompleteRead/RemoteDisconnected가 모두 새 except 튜플에 걸리는지 isinstance로 직접 확인함.",
+    "commit": "b517850"
+  },
+  {
+    "timestamp": "2026-11-22_0517",
+    "proposal": "main_loop.py의 사이클 최상위 try/except(기존 '사이클 실행 중 에러' 블록)에 다른 except 블록들과 동일한 '반복 예외 1시간 1회 전체 트레이스' 쓰로틀 패턴 적용",
+    "role": "execution",
+    "decision": "applied",
+    "reason": "synthesizer Top3 #2. 이미 파일 다른 곳(코인/전략 단위)에 있는 패턴을 그대로 복제하는 것이라 신규 로직 없음, 리스크 거의 없음. 쓰로틀 로직(최초 발생 시 전체 트레이스, 1시간 내 반복은 warning만, 1시간 후 재발생 시 다시 전체 트레이스, 다른 예외 타입은 독립적으로 쓰로틀)을 standalone 시뮬레이션으로 검증함.",
+    "commit": "2d6103e"
+  },
+  {
+    "timestamp": "2026-11-22_0517",
+    "proposal": "코인별 손절/강제청산 발생 횟수를 대시보드에 집계해서 보여주기 (손절선/배분을 바꾸기 전에 데이터부터 쌓기)",
+    "role": "risk",
+    "decision": "applied",
+    "reason": "synthesizer Top3 #3. 트레이딩 로직 변경이 아니라 기록/표시 추가뿐이라 리스크가 작고, MDD 컬럼(risk 제안 #1)보다 구현 난이도가 낮음(스키마 마이그레이션 불필요 — trades.reason 접두어로 집계하는 순수 조회). storage.stop_loss_counts_by_coin()을 scratch in-memory SQLite DB로 직접 검증(BUY/SELL/SHORT_OPEN/손절/강제청산 혼합 거래에서 코인별 집계가 정확한지, 무관한 거래가 섞이지 않는지 확인).",
+    "commit": "a415219"
+  },
+  {
+    "timestamp": "2026-11-22_0517",
+    "proposal": "risk 구체적 제안 #1 — portfolios/snapshots에 전략별 running MDD(최고점 대비 하락폭) 컬럼 추가",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "snapshots 테이블에 새 컬럼을 추가하는 스키마 변경이 필요하고, 기존에 저장된 snapshot 행에는 값이 없어 초기 구간을 공백/0으로 처리해야 함 — 판단 기준 3번(스키마 마이그레이션이 필요한 제안은 제외)에 해당해 반영하지 않음. synthesizer도 같은 이유로 이번 Top3에서 제외함. 코인별 손절 횟수 집계(risk 제안 #2, 이번 회차 적용)로 먼저 데이터를 쌓은 뒤, 필요성이 확인되면 사람이 스키마 변경을 직접 판단해야 함.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0517",
+    "proposal": "storage.py connect()에 PRAGMA auto_vacuum=INCREMENTAL 도입 + 일일 prune 루틴에 PRAGMA incremental_vacuum(N) 추가 — trading.db 파일 크기가 느리게 계속 늘어나는 경우 대응",
+    "role": "storage",
+    "decision": "skipped",
+    "reason": "리포트 본문이 명시: auto_vacuum 모드는 빈 DB에서만 설정 가능해 기존 trading.db에는 VACUUM 1회 선행이 필요하고, 이는 DB 전체를 재작성하는 무거운 작업이라 적용 순간 main_loop/dashboard 양쪽 접근이 막히거나 느려질 수 있음 — '운영 중단이 필요하거나 기존 데이터 변환이 필요한 제안은 제외'(판단 기준 3번)에 해당. 또한 '파일 크기가 실제로 계속 늘어나는지'는 실제 운영 trading.db를 봐야 판단 가능(판단 기준 4번 해당, 리포트 본문도 이를 명시)해 이중으로 반영 보류 대상. 사람이 직접 운영 중 trading.db 크기 추이를 확인한 뒤, 유지보수 시간에 백업 후 수동 VACUUM으로 진행해야 함.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0517",
+    "proposal": "lstm_model.py FEATURE_COLS에 BTC 수익률(btc_ret) 피처 추가 — build_features/build_dataset/train_model/predict_proba/LSTMStrategy.signal 전체 호출 체인에 ref_df 전달 필요",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "매매 전략의 핵심 판단(LSTM 신호 생성에 쓰이는 피처)을 바꾸는 제안이고, 리포트 스스로 명시한 대로 '피처 추가 전후 val_accuracy 변화, 실거래 손익에 미치는 영향은 실제 운영 데이터를 봐야 판단 가능'(판단 기준 4번 해당). 또한 N_FEATURES가 바뀌면 기존 {coin}_lstm.pt의 입력 shape가 달라져 model.load_state_dict()가 예외를 던지므로, 배포 시 기존 가중치 삭제 또는 finetune=False 강제가 필요해 기존 동작을 깨뜨릴 위험도 낮지 않음(판단 기준 3번도 걸림). 코드 구조만으로 효과를 검증할 수 없어 반영하지 않고, 실제 재학습/백테스트 환경이 마련된 뒤 사람이 판단해야 함.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0517",
+    "proposal": "strategies.py MACDStrategy.default_params()를 1분봉용으로 단축(예: fast=5, slow=13, signal=4)",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "매매 전략의 핵심 판단(MACD 임계값)을 바꾸는 제안이며, 효과가 백테스트 전에는 불확실함을 리포트 스스로 인정함('재튜닝/백테스트 전제'). 파라미터를 짧게 바꾸면 휩쏘 증가로 수수료 비용이 커질 수 있다는 트레이드오프도 리포트에 명시돼 있어, 코드 리뷰만으로 효과를 명백히 검증할 수 없음(판단 기준 4번 해당). synthesizer도 동일한 이유로 이번 Top3에서 제외하고 '백테스트로 휩쏘 빈도/누적 수수료를 측정하는 것을 선행 조건'으로 둠.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0517",
+    "proposal": "ma_cross_rsi(long_window 50~60으로 확대)와 macd_momentum의 윈도우를 의도적으로 분리해 신호 상관도(사실상 중복 베팅) 완화",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "매매 전략의 핵심 판단(이동평균 윈도우)을 바꾸는 제안. 윈도우를 바꾸면 각 전략의 백테스트 성과 자체가 달라지고 learner.py의 파라미터 적응 로직과 함께 재검증이 필요하다고 리포트에 명시돼 있어, 효과가 코드 리뷰만으로 검증 가능하지 않음(판단 기준 4번). 백테스트 환경 마련 후 사람이 판단해야 함.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0517",
+    "proposal": "4개 조건식 signal()에 공통 볼륨 필터 추가(예: 최근 20개 평균 거래량의 30% 미만이면 BUY/SELL을 HOLD로 억제)",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "매매 전략의 핵심 판단(진입/청산 조건)을 바꾸는 제안. 리포트 스스로 '임계값을 과도하게 보수적으로 잡으면 유효한 신호도 걸러져 거래 빈도가 줄어들 위험'을 명시해, 효과가 코드 리뷰만으로 검증되지 않음(판단 기준 4번). 백테스트로 임계값별 거래 빈도/적중률 변화를 확인한 뒤 사람이 판단해야 함.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0517",
+    "proposal": "MACrossRSIStrategy의 SELL 필터(rsi_sell_min)를 신규 진입(숏)과 보유 포지션 청산으로 역할을 나눠, 청산 쪽에는 RSI 필터를 적용하지 않는 옵션 검토",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "매매 전략의 핵심 판단(청산 조건)을 바꾸는 제안이고, 리포트 자체가 'main_loop.py가 SELL을 실제로 어떻게 쓰는지 확인 필요 — 이 파일만으로는 포지션 보유 여부를 알 수 없음'이라고 명시함. 또한 필터를 완화하면 급락장 탈출은 빨라지지만 노이즈성 하락에도 패닉셀이 늘어 원래 필터가 막으려던 문제가 재발할 수 있다는 트레이드오프가 있어, 코드 리뷰만으로 효과를 검증할 수 없음(판단 기준 4번). 사람이 main_loop.py의 실제 SELL 처리 경로와 백테스트를 함께 검토해야 함.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0517",
+    "proposal": "(역할 간 긴장관계, synthesizer 기록) strategy의 MACD 파라미터 단축(신호 민감도 증가)이 risk가 지적한 '확신도 기반 최대 90% 베팅 구조에서 신호 전환이 잦아지면 수수료가 누적된다'는 우려와 충돌",
+    "role": "synthesizer",
+    "decision": "skipped",
+    "reason": "synthesizer가 risk 쪽 근거(TRADE_FRACTION이 이미 확신도 기반 최대 90%까지 움직이는 구조가 코드로 확인됨, 수수료는 거래 횟수에 비례해 확정적으로 발생)가 strategy 쪽(파라미터 단축 효과는 백테스트 전 불확실, 제안자 본인도 재검토 전제를 닮) 보다 탄탄하다고 판단해 MACD 파라미터 변경을 이번 Top3에 넣지 않기로 함 — 위에서 이미 개별적으로 skip 처리한 strategy 제안과 결론이 일치. 변경 전 반드시 휩쏘 빈도/누적 수수료를 백테스트로 측정하는 것을 선행 조건으로 둠. 같은 맥락에서 lstm의 BTC 수익률 피처 추가도 strategy의 전략 다양화(윈도우 분리) 방향과 완전히 같은 방향은 아니라는 점을 다음 검토 시 유의해야 함.",
+    "commit": null
   }
 ]
