@@ -129,6 +129,17 @@ def _http_get_json(url: str, timeout: int = 10, retries: int = 3) -> dict | list
             # except Exception까지 그대로 전파되고 있었다 (analysis_team
             # execution 리포트 2026-11-22_0517 발견점 #1, synthesizer Top3 #1).
             last_err = e
+            if isinstance(e, urllib.error.HTTPError) and e.code != 429 and not (500 <= e.code < 600):
+                # 영구적인 4xx(마켓 코드 오타, API 스펙 변경 등)는 재시도해도
+                # 결과가 달라지지 않는데, 기존에는 이런 경우도 네트워크성 에러와
+                # 동일하게 최대 3회(백오프 1+2초 포함)까지 재시도한 뒤에야
+                # 실패했다. 매 60초 사이클마다 호출되는
+                # fetch_latest_minute_candles에서 이런 상황이 생기면 그만큼
+                # 사이클 지연에 조금씩 기여할 수 있었다(analysis_team execution
+                # 리포트 2026-11-22_0918 구체적 제안 #2). 429(rate limit)와
+                # 5xx(서버 쪽 일시 장애)만 재시도 대상으로 남기고, 그 외 4xx는
+                # 즉시 실패로 전환한다.
+                raise FetchError(f"GET failed with non-retryable HTTP {e.code}: {url} ({e})") from e
             # 마지막 시도(attempt == retries - 1)가 실패하면 그 뒤로는 어차피
             # 재시도하지 않고 바로 루프를 빠져나가 FetchError를 던지므로, 그
             # 직전에 sleep할 이유가 없다. 예전에는 마지막 시도 실패 후에도
