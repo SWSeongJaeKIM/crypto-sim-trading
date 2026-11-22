@@ -2534,5 +2534,61 @@
     "decision": "applied",
     "reason": "학습 후 '저장할지' 판단하는 안전장치 로직만 바꾸고 build_features()/predict_proba() 추론 경로는 전혀 건드리지 않아, 코드 배포 즉시 기존 추론 동작이 바뀌는 위험이 없음(차기 재학습 때부터만 새 기준이 적용됨). 실제 매매가 나가는 확신 구간의 정확도로 롤백 기준을 맞추는 것은 '측정 지표와 안전장치 목적의 불일치'라는 명백한 버그 수정이라 코드 리뷰만으로 타당성이 검증됨. numpy로 '전체 정확도는 동일(0.65=0.65)한데 확신구간 정확도만 80%->50%로 붕괴'하는 사례를 구성해, 기존 로직은 저장(should_save=True, 안전장치 공백)하지만 새 로직은 올바르게 롤백(should_save=False)함을 시뮬레이션으로 확인. 샘플 부족 시 fallback('overall' 비교)으로 정확히 빠지는 것도 별도 시나리오로 확인.",
     "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_2118",
+    "proposal": "lstm_model.py build_features()의 vol_chg(volume.pct_change())에 log1p(sign*abs)/clip(-5,5) 등을 적용해 저거래량 코인 거래량 급증 시 그래디언트 불안정 방지",
+    "role": "lstm (synthesizer Top3 #3)",
+    "decision": "skipped",
+    "reason": "synthesizer는 Top3에 포함시키며 '피처 차원을 바꾸지 않아 전체 재학습(체인 리셋) 없이 적용 가능'이라 평가했지만, 이는 같은 lstm 리포트 본문의 리스크/트레이드오프 항목(2)가 명시한 '피처 분포가 바뀌므로 기존 가중치와 스케일이 안 맞아 파인튠 체인을 리셋(전체 재학습)해야 함 — 일시적 성능 저하 구간 발생'과 직접 충돌한다. local/lstm_model.py 코드를 직접 확인한 결과 build_features()는 predict_proba()(매 사이클 추론)와 train_model()(재학습) 양쪽에서 동일하게 호출되므로, 이 변경을 배포하면 다음 재학습을 기다리지 않고 바로 다음 추론 사이클부터 기존에 저장된 가중치가 전혀 새로운 분포의 vol_chg 값을 입력으로 받게 된다 — '기존 동작을 깨뜨릴 위험이 낮을 것'이라는 반영 기준에 어긋나는 즉시적 실거래 신호 변화다. 과도기 동안 예측 품질 저하 정도는 실제 운영 데이터 없이는 가늠할 수 없어 보수적으로 반영하지 않음 — 다음에 사람이 (전체 재학습과 함께 배포하는 방식 등을 고려해) 직접 판단 필요.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_2118",
+    "proposal": "lstm_model.py build_features()에 기준 코인(BTC) 동시점 수익률(btc_ret) 피처 추가 — 코인 간 동조화 신호 반영",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "입력 피처 차원이 늘어나 기존 저장된 가중치(FEATURE_COLS 기준 shape)와 불일치해 전체 코인 전체 재학습(finetune=False 강제)이 필요하고, 효과(동조화 신호가 실제 예측/매매에 도움이 되는지)는 운영 데이터로만 검증 가능 — 기존 동작을 깨뜨릴 위험과 운영 데이터 필요성 양쪽 기준에 모두 해당해 반영하지 않음. 이전 회차(예: 2026-11-22_2018)에서도 동일한 이유로 반복 보류된 제안.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_2118",
+    "proposal": "strategies.py bollinger_rsi/trend_follow의 BUY/SELL 신호에 거래량 필터(volume_ok, 최근 20분 평균 대비 min_ratio) 추가해 저유동성 구간 오신호 축소",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "진입/청산 조건 자체를 바꾸는 매매 핵심 판단 변경이며, 리포트 스스로 'min_ratio 튜닝 부담'과 알트코인 신호 희소화 위험을 리스크로 명시하고 효과는 실제 가격 데이터 기반 백테스트로 검증해야 한다고 밝힘 — 코드 리뷰만으로 효과가 명백히 검증되지 않아 반영하지 않음. 이전 회차(2026-11-22_2018)에서도 유사한 volume_floor_ok 제안이 같은 이유로 보류됨.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_2118",
+    "proposal": "strategies.py ma_cross_rsi의 rsi_sell_min 필터를 신규진입 억제용과 보유포지션 청산용으로 분리(exit_signal 신설 또는 급락 감지 보조조건 추가)",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "보유 포지션 청산 타이밍(매매 핵심 판단)을 바꾸는 변경이고, 리포트 자신도 '패닉 감지 조건을 잘못 잡으면 정상적 단기 되돌림에도 과도하게 손절할 수 있다'는 트레이드오프를 명시함. 급락 구간에서의 실제 효과는 운영 데이터(실제 급락 시 매도 타이밍 결과) 없이 코드만으로 검증 불가능해 반영하지 않음.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_2118",
+    "proposal": "strategies.py macd_momentum의 fast/slow를 12/26에서 5/20로 당겨 ma_cross_rsi와의 신호 중첩(상관관계) 완화",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "신호 빈도를 늘리는 방향인데, 같은 회차 risk 리포트는 균등 배분+동일 손절%(8%) 구조로 변동성 큰 코인(DOGE/XRP 등)에서 손절-재진입이 반복되며 수수료 드래그가 쌓일 위험을 코드 구조(portfolio.py per_coin 배분 + STOP_LOSS_PCT 단일 상수)로 구체적으로 짚으며 거래 빈도를 늘리지 않는 쪽을 시사함 — 두 제안이 거래 빈도 방향에서 충돌. synthesizer의 판단과 동일하게, risk 쪽 근거(이미 존재하는 코드 구조를 근거로 한 구체적 메커니즘 지적, 운영 데이터 확인 후 결정하자는 보수적 원칙)가 strategy 쪽(조건부 제안이고 본인도 노이즈 민감도·수수료 증가 리스크를 인정)보다 탄탄하다고 판단해 반영하지 않음 — stop_loss_counts_by_coin 등 운영 데이터 확인 이후로 보류.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_2118",
+    "proposal": "storage.py connect()에 PRAGMA auto_vacuum=INCREMENTAL 추가(신규 설치용) + main_loop.py 일일 prune 블록에 PRAGMA incremental_vacuum(1000) 추가. 기존 trading.db에는 1회성 수동 VACUUM 선행 필요",
+    "role": "storage",
+    "decision": "skipped",
+    "reason": "기존 trading.db에 효과를 내려면 EXCLUSIVE 잠금을 거는 1회성 수동 VACUUM(매매 사이클이 멈춘 시점에만 실행 가능)이 선행되어야 해 '운영 중단이 필요한 변경'(반영 기준 3번 제외 대상)에 해당. storage 분석가 본인도 '디스크 여유가 보통 있어 이 항목의 긴급도는 낮다', '지금 당장은 그대로 둬도 운영에 지장 없음도 유효한 선택'이라 평가했고 synthesizer도 이 이유로 Top3에서 제외함 — 반영하지 않음. (incremental_vacuum(1000) 자체는 VACUUM 없이도 넣을 수 있지만 auto_vacuum 모드 전환 전에는 효과가 없어 의미가 없음.)",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_2118",
+    "proposal": "portfolio.py CoinSlot에 코인별 변동성(ATR% 등) 기반 손절 퍼센트를 선택적으로 둘 수 있게 하는 구조 변경 검토",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "손절 기준(매매 핵심 판단)을 코인별로 차등화하는 변경이며, risk 리포트 본인이 '변경 전에 실제 코인별 손절 발생 빈도 데이터(storage의 stop_loss_counts_by_coin)로 먼저 확인하는 것을 권장'하고 '코드만으로는 결론을 낼 수 없다'고 명시함 — 운영 데이터가 필요한 제안에 해당해 반영하지 않음. 코드 구조상 '가능성'만 확인됐을 뿐 실제 손절 반복 발생 여부는 운영 데이터를 봐야 판단 가능.",
+    "commit": null
   }
 ]
