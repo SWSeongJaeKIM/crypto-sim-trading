@@ -368,6 +368,7 @@ function renderCards(containerId, mode) {
         <div class="${cls}">${p.pnl_pct >= 0 ? '+' : ''}${p.pnl_pct.toFixed(2)}%</div>
         <div class="${cls}" style="font-size:14px;margin-top:2px;">${pnlSign}${Math.round(p.pnl_krw).toLocaleString()}원</div>
         <div style="color:#9aa0a6;font-size:12px;margin-top:4px;">평가액 ${Math.round(p.total_value_krw).toLocaleString()}원 (원금 ${Math.round(p.initial_capital_krw).toLocaleString()}원) · 거래 ${p.trade_count}건</div>
+        <div style="color:#9aa0a6;font-size:11px;margin-top:2px;">최대낙폭(MDD) -${(p.max_drawdown_pct || 0).toFixed(2)}%</div>
         ${resetNote}
         <div style="display:${isOpen ? 'block' : 'none'};">${renderPositionDetail(p.slots || [])}</div>
       </div>`;
@@ -746,6 +747,11 @@ def api_data():
                 "initial_capital_krw": initial,
                 "pnl_krw": total - initial,
                 "pnl_pct": pnl,
+                # 수익률만으로는 변동성이 큰 코인에 쏠린 전략이 우연히 좋은
+                # 성과로만 보일 수 있어, 고점 대비 낙폭도 같이 노출한다
+                # (analysis_team risk 리포트 2026-11-22_0918, synthesizer
+                # Top3 #2 — portfolio.py의 peak_value_krw/max_drawdown_pct).
+                "max_drawdown_pct": pf.max_drawdown_pct,
                 "trade_count": doc.get("trade_count", 0),
                 "created_at": doc.get("created_at"),
                 "slots": slots,

@@ -495,10 +495,14 @@ def run_one_cycle(conn) -> None:
                                               reason=f"{strat_name} SELL (확신도 {confidence:.2f} -> {fraction*100:.0f}%)")
 
                 key = portfolio_key(strat_name, mode)
-                storage.set_portfolio(conn, key, pf.to_doc(), now)
-                storage.add_trades(conn, key, pf.new_trades_as_dicts())
                 total_value = pf.total_value_krw(prices_krw)
                 pnl_pct = pf.pnl_pct(prices_krw)
+                # to_doc() 저장 "직전"에 갱신해야 peak_value_krw/max_drawdown_pct가
+                # 이번 사이클 값으로 반영된 문서가 저장된다 (analysis_team risk
+                # 리포트 2026-11-22_0918 발견점 #4, synthesizer Top3 #2).
+                pf.update_drawdown(total_value)
+                storage.set_portfolio(conn, key, pf.to_doc(), now)
+                storage.add_trades(conn, key, pf.new_trades_as_dicts())
                 storage.add_snapshot(conn, key, now, total_value, pnl_pct)
         except Exception as e:
             log.exception(f"[{strat_name}] 전략 처리 중 에러, 이번 사이클은 건너뜀 "

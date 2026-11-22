@@ -111,6 +111,17 @@ class Portfolio:
     trade_count: int = 0  # 지금까지의 총 거래 건수(로그 전체 대신 카운터만 유지)
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    # pnl_pct()만으로는 "수익률"만 보이고 변동성/낙폭 같은 리스크 지표가
+    # 전혀 없어, 변동성이 큰 코인에 쏠린 전략이 우연히 좋은 성과로만 보일 수
+    # 있었다(analysis_team risk 리포트 2026-11-22_0918 발견점 #4, synthesizer
+    # Top3 #2). peak_value_krw(지금까지 관측된 평가금액 최고치)와
+    # max_drawdown_pct(그 고점 대비 최대 하락률)를 추가해 to_doc()에 노출한다.
+    # 기존에 저장된 포트폴리오 문서에는 이 필드가 없지만, 아래 둘 다 기본값
+    # 0.0으로 from_doc()에서 자연히 채워지므로 마이그레이션이 필요 없다 —
+    # 다만 그 경우 "지금까지의" 최고치가 아니라 "이 필드 추가 이후"의 최고치부터
+    # 다시 추적을 시작하게 된다(과거 데이터를 추정해서 채우지 않음).
+    peak_value_krw: float = 0.0
+    max_drawdown_pct: float = 0.0
 
     @classmethod
     def new(cls, strategy_name: str, coins: list[str] | None = None,
@@ -343,6 +354,21 @@ class Portfolio:
         tv = self.total_value_krw(current_prices_krw)
         return (tv / self.initial_capital_krw - 1.0) * 100
 
+    def update_drawdown(self, total_value_krw: float) -> float:
+        """현재 평가금액(호출한 쪽이 total_value_krw()로 이미 계산해둔 값을
+        그대로 넘긴다 — 여기서 다시 계산하지 않음)을 기준으로 peak_value_krw를
+        갱신하고, 고점 대비 낙폭(max_drawdown_pct, 0 이상 %)을 갱신한다.
+        매 사이클 호출해야 다음 사이클의 peak 판단이 정확하다 — 호출한 쪽
+        (main_loop.py)이 to_doc() 저장 직전에 호출한다. 갱신된
+        max_drawdown_pct를 반환한다(호출부에서 바로 로그에 쓸 수 있도록)."""
+        if total_value_krw > self.peak_value_krw:
+            self.peak_value_krw = total_value_krw
+        if self.peak_value_krw > 0:
+            drawdown_pct = max(0.0, (self.peak_value_krw - total_value_krw) / self.peak_value_krw * 100)
+            if drawdown_pct > self.max_drawdown_pct:
+                self.max_drawdown_pct = drawdown_pct
+        return self.max_drawdown_pct
+
     # ---- DB 문서 변환 (db_write/db_get에 그대로 주고받는 dict) ----
 
     def to_doc(self) -> dict:
@@ -356,6 +382,8 @@ class Portfolio:
             "trade_count": self.trade_count,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "peak_value_krw": self.peak_value_krw,
+            "max_drawdown_pct": self.max_drawdown_pct,
         }
 
     @classmethod
@@ -369,6 +397,8 @@ class Portfolio:
             trade_count=d.get("trade_count", 0),
             created_at=d.get("created_at", datetime.now(timezone.utc).isoformat()),
             updated_at=d.get("updated_at", datetime.now(timezone.utc).isoformat()),
+            peak_value_krw=d.get("peak_value_krw", 0.0),
+            max_drawdown_pct=d.get("max_drawdown_pct", 0.0),
         )
 
     def new_trades_as_dicts(self) -> list[dict]:
