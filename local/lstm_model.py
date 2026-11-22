@@ -229,10 +229,19 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
         val_pred = (torch.sigmoid(val_logits) > 0.5).float()
         val_acc = (val_pred == y_val_t).float().mean().item()
 
-    # 이전 저장 모델의 val_accuracy와 비교해, 이번 파인튠으로 성능이 크게
+    # 이전 저장 모델의 val_accuracy와 비교해, 이번 학습으로 성능이 크게
     # 떨어졌으면 저장을 건너뛰고 기존 가중치를 그대로 유지한다 (아래
-    # VAL_ACC_ROLLBACK_THRESHOLD 설명 참고). 최초 학습(resumed_from_existing=False)
-    # 은 비교 대상(기존 가중치)이 없으므로 항상 저장한다.
+    # VAL_ACC_ROLLBACK_THRESHOLD 설명 참고). 비교 기준은 "이번에 가중치를
+    # 이어받았는지(resumed_from_existing)"가 아니라 "비교할 이전 모델 파일이
+    # 있는지(existing_path.exists())"다 — finetune_chain_length가
+    # FINETUNE_CHAIN_LENGTH_RESET_THRESHOLD를 넘어 main_loop.py가 finetune=False로
+    # 전체 재학습을 강제하는 경우에도 existing_path는 이미 존재하므로, 그렇게
+    # 처음부터 다시 학습한 모델도 직전 저장 모델보다 val_acc가 크게 떨어지면
+    # 롤백돼야 한다. resumed_from_existing만 보면 이 경로에서 롤백 비교가
+    # 통째로 스킵돼, 안전장치 없이 성능이 나쁜 모델이 그대로 저장·추론에
+    # 쓰이는 공백이 있었다 (analysis_team 리포트 2026-11-22_1326_lstm.md,
+    # 2026-11-22_1418_lstm.md에서 지적). 완전히 처음 학습하는 코인(모델 파일
+    # 자체가 없음)만 비교 대상이 없으므로 항상 저장한다.
     meta_path = MODEL_DIR / f"{coin}_lstm_meta.json"
     prev_val_acc = None
     # "영구 이어학습(finetune=True 기본값)" 구조에서는 전체 재학습(finetune=False)이
@@ -242,7 +251,7 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
     # 연속 파인튠 횟수를 추적할 수 있게 한다. 학습 자체(가중치/lr/저장 로직)는
     # 전혀 바꾸지 않고, 관측 가능한 메타데이터만 추가하는 변경이다.
     prev_chain_length = 0
-    if resumed_from_existing and meta_path.exists():
+    if existing_path.exists() and meta_path.exists():
         try:
             prev_meta = json.loads(meta_path.read_text())
             prev_val_acc = prev_meta.get("val_accuracy")
@@ -253,7 +262,7 @@ def train_model(coin: str, df: pd.DataFrame, epochs: int = 8, batch_size: int = 
 
     should_save = True
     skip_reason = None
-    if resumed_from_existing and prev_val_acc is not None and (prev_val_acc - val_acc) > VAL_ACC_ROLLBACK_THRESHOLD:
+    if existing_path.exists() and prev_val_acc is not None and (prev_val_acc - val_acc) > VAL_ACC_ROLLBACK_THRESHOLD:
         should_save = False
         skip_reason = (f"val_acc 하락으로 롤백: 이전 {prev_val_acc:.4f} -> 이번 {val_acc:.4f} "
                         f"(임계값 {VAL_ACC_ROLLBACK_THRESHOLD})")
