@@ -591,7 +591,7 @@ def prediction_accuracy(conn, coin: str | None = None, limit: int = 500) -> dict
             "accuracy": round(correct / total, 4) if total else None}
 
 
-def prediction_accuracy_by_coin(conn, limit_per_coin: int = 500) -> list[dict]:
+def prediction_accuracy_by_coin(conn, limit_per_coin: int = 500, lookback_days: int = 14) -> list[dict]:
     """코인별 적중률 요약(각 항목은 prediction_accuracy()와 동일한 형식:
     coin/total/correct/accuracy).
 
@@ -604,24 +604,39 @@ def prediction_accuracy_by_coin(conn, limit_per_coin: int = 500) -> list[dict]:
     버전을 포함)로 한 쿼리 안에서 그대로 재현해, 코인 수가 늘어나도 쿼리
     횟수는 항상 2회(코인 목록 1회 + 집계 1회)로 고정된다. resolved=1 건이
     전혀 없는 코인도 total=0, accuracy=None으로 결과에 포함되는 기존 동작을
-    그대로 유지한다."""
+    그대로 유지한다.
+
+    ROW_NUMBER()는 "rn<=limit_per_coin" 필터를 파티션 안으로 밀어넣지 못해
+    SQLite가 매번 코인별 resolved=1 전체 행을 끝까지 읽은 뒤에야 rn을 매길
+    수 있다 — 이 함수가 dashboard.py의 15초 polling 핫패스에서 호출되는데,
+    lstm_predictor가 코인당 1분에 1건씩 예측을 쌓아 PREDICTIONS_PRUNE_KEEP_DAYS
+    (90일) 직전엔 코인당 최대 ~13만 행까지 쌓일 수 있어, 보관 기간이 늘수록
+    매 polling 비용이 계속 커지는 구조였다(analysis_team storage 리포트
+    2026-11-22_1818 발견점 #1, synthesizer Top3 #1). limit_per_coin건은
+    정상 cadence(코인당 1분 1건)로는 수 시간 분량이므로, WHERE 절에 넉넉한
+    시간 하한(기본 14일 — 제안된 3~7일보다 더 여유 있게 잡아 사이클이 드문
+    코인도 500건을 놓치지 않도록 함)을 추가로 걸어 인덱스
+    idx_predictions_resolved_coin_time(resolved, coin, predicted_at DESC)가
+    그 구간만 훑고 멈추게 한다. predicted_at은 ISO8601 UTC 문자열이라
+    문자열 비교로도 시간 순서가 맞는다(prune_predictions()와 동일한 방식)."""
     coins = [r["coin"] for r in conn.execute("SELECT DISTINCT coin FROM predictions").fetchall()]
     if not coins:
         return []
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
     rows = conn.execute(
         """
         WITH ranked AS (
             SELECT coin, correct,
                    ROW_NUMBER() OVER (PARTITION BY coin ORDER BY predicted_at DESC) AS rn
             FROM predictions
-            WHERE resolved = 1
+            WHERE resolved = 1 AND predicted_at >= ?
         )
         SELECT coin, COUNT(*) AS total, SUM(correct) AS correct
         FROM ranked
         WHERE rn <= ?
         GROUP BY coin
         """,
-        (limit_per_coin,),
+        (cutoff, limit_per_coin),
     ).fetchall()
     agg_by_coin = {r["coin"]: (r["total"], r["correct"] or 0) for r in rows}
     out = []
