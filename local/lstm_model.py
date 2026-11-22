@@ -307,6 +307,27 @@ def train_all(candles: dict[str, pd.DataFrame], **kwargs) -> list[dict]:
     return [train_model(coin, df, **kwargs) for coin, df in candles.items()]
 
 
+def get_finetune_chain_length(coin: str) -> int:
+    """{coin}_lstm_meta.json에 저장된 현재 finetune_chain_length(연속 파인튠 횟수)를
+    조회. 파일이 없거나 읽기 실패 시 0("아직 파인튠 체인 없음"과 동일하게 안전한
+    기본값)을 반환한다.
+
+    train_model()은 이미 이 값을 meta.json에 기록만 하고 자동으로 쓰지는
+    않았다(위 finetune_chain_length 변수와 주석 참고) — "영구 이어학습" 구조에서
+    언제 한 번 전체 재학습(finetune=False)이 필요한지 메타만 보고 판단할 수
+    있게 하기 위한 조회용 헬퍼다. 학습 로직(가중치/lr/저장) 자체는 전혀 건드리지
+    않는다 (analysis_team lstm 리포트 2026-11-22_0018, synthesizer Top3 #2 — 호출부는
+    main_loop.py의 retrain_lstm())."""
+    meta_path = MODEL_DIR / f"{coin}_lstm_meta.json"
+    if not meta_path.exists():
+        return 0
+    try:
+        meta = json.loads(meta_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return 0
+    return meta.get("finetune_chain_length") or 0
+
+
 _loaded_models: dict[str, LSTMClassifier] = {}
 
 

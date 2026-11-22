@@ -66,6 +66,16 @@ PORTFOLIO_MODES = ["reset", "cumulative"]
 # synthesizer Top3 #1). 매 사이클(1분 간격) 무조건 찍으면 로그가 금방 폭주하므로
 # 임계치 초과 시에만 남긴다.
 CYCLE_ELAPSED_WARN_THRESHOLD_SEC = 30
+# "영구 이어학습(finetune=True 기본값)" 구조에서는 전체 재학습(finetune=False)이
+# 자동으로 트리거되지 않아, 연속 파인튠이 계속 누적되면 가중치가 특정 구간
+# 패턴에 고착될 위험이 있다 — lstm_model.py가 이미 meta.json에
+# finetune_chain_length(연속 파인튠 횟수)를 기록만 해두고 있었다(analysis_team
+# lstm 리포트 2026-11-21_2118 발견점, 2026-11-22_0018 발견점 #3). 이 값이 아래
+# 임계값 이상이면 retrain_lstm()이 그 코인만 finetune=False로 강제 전환해
+# 처음부터 다시 학습한다(analysis_team lstm 리포트 2026-11-22_0018,
+# synthesizer Top3 #2). 하루 최대 RETRAIN_TIMES_LOCAL(10)회 중 한 슬롯만큼의
+# 추가 학습 비용이 코인별로 가끔 드는 것 외에는 기존 파인튠 로직을 바꾸지 않음.
+FINETUNE_CHAIN_LENGTH_RESET_THRESHOLD = 30
 # 클라우드 6에이전트 분석팀(analysis_team/)이 GitHub Actions 스케줄로 매시간
 # 이 분(UTC)에 도는데, 이 PC 루프는 그 스케줄을 실행하지 않고 "다음 실행이
 # 몇 분 남았는지"만 콘솔에 보여주기 위해 참고한다(실제 실행 주기를 바꾸고
@@ -490,7 +500,14 @@ def retrain_lstm() -> bool:
                          current_coin=_coin, coin_index=_i, coin_total=len(history), train_step="fitting")
 
         try:
-            r = lstm_model.train_model(coin, df, epochs=8, history_days=HISTORY_DAYS_FOR_TRAIN, on_epoch=_on_epoch)
+            chain_length = lstm_model.get_finetune_chain_length(coin)
+            force_full_retrain = chain_length >= FINETUNE_CHAIN_LENGTH_RESET_THRESHOLD
+            if force_full_retrain:
+                log.info(f"[retrain/{coin}] finetune_chain_length={chain_length} >= "
+                         f"{FINETUNE_CHAIN_LENGTH_RESET_THRESHOLD} — 이번 슬롯은 전체 재학습"
+                         f"(finetune=False)으로 전환해 가중치 고착을 방지합니다.")
+            r = lstm_model.train_model(coin, df, epochs=8, history_days=HISTORY_DAYS_FOR_TRAIN,
+                                        on_epoch=_on_epoch, finetune=not force_full_retrain)
         except Exception as e:
             # 한 코인 학습 실패가 이번 슬롯 전체(retrain_lstm() 전체 예외 전파 ->
             # last_retrain_at 미갱신 -> 다음 사이클에 90일 데이터 재수집+전체 재학습
