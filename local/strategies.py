@@ -123,6 +123,11 @@ class MACrossRSIStrategy(Strategy):
 
     @classmethod
     def default_params(cls) -> dict:
+        # short_window/long_window(9/26)와 rsi_period(14)는 TA 교과서의 범용
+        # 일봉 기준 기본값이며, 1분봉 기준으로 재튜닝된 적은 없다. 값 자체를
+        # 바꾸는 건 매매 빈도/수수료에 직결되는 핵심 판단이라 실제 백테스트
+        # 결과가 있어야 안전하게 바꿀 수 있다 — 이 주석은 그 사실만 남겨둔다
+        # (analysis_team strategy 리포트 2026-11-22_1922 발견점 #1).
         return {
             "short_window": 9,
             "long_window": 26,
@@ -202,6 +207,10 @@ class BollingerRSIStrategy(Strategy):
 
     @classmethod
     def default_params(cls) -> dict:
+        # bb_period/bb_std(20/2.0)와 rsi_period(14)도 일봉 기준 범용 기본값을
+        # 그대로 쓰고 있다 — 위 MACrossRSIStrategy와 동일한 사유로 재튜닝은
+        # 백테스트 후에 결정 (analysis_team strategy 리포트 2026-11-22_1922
+        # 발견점 #1).
         return {
             "bb_period": 20,
             "bb_std": 2.0,
@@ -275,6 +284,10 @@ class MACDStrategy(Strategy):
 
     @classmethod
     def default_params(cls) -> dict:
+        # fast/slow/signal(12/26/9)도 일봉 기준 범용 기본값 — 1분봉에서는
+        # min_bars()가 37캔들(37분)이라 스캘핑치고 반응이 느리다는 점이
+        # 지적됐으나, 재튜닝 효과는 백테스트로만 확정 가능 (analysis_team
+        # strategy 리포트 2026-11-22_1922 발견점 #1).
         return {
             "fast": 12,
             "slow": 26,
@@ -345,6 +358,9 @@ class TrendFollowStrategy(Strategy):
 
     @classmethod
     def default_params(cls) -> dict:
+        # ma_window(50)도 일봉 기준 범용 기본값 — 1분봉 재튜닝 여부는
+        # 백테스트 필요 (analysis_team strategy 리포트 2026-11-22_1922
+        # 발견점 #1).
         return {
             "ma_window": 50,
             "buffer_pct": 0.5,  # MA 대비 ±0.5% 밴드 안에서는 HOLD(노이즈 방지)
