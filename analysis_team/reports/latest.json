@@ -1,47 +1,47 @@
 {
-  "generated_at": "2026-11-22_2118",
+  "generated_at": "2026-11-22_2224",
   "roles": {
     "execution": {
       "role": "execution",
       "role_label": "실행/버그 분석가",
-      "timestamp": "2026-11-22_2118",
-      "path": "analysis_team/reports/2026-11-22_2118_execution.md",
-      "summary": "예외처리·재시도·로깅 체계는 이미 코인/전략 단위 격리, 반복 예외 쓰로틀링, 사이클 드리프트 보정까지 상당히 정교하게 구현되어 있음. 남은 지점은 \"LSTM 재학습 소요시간 추정 docstring의 현실성\"과 \"평상시 사이클 지연 경고의 구간 분해 부재\" 두 가지."
+      "timestamp": "2026-11-22_2224",
+      "path": "analysis_team/reports/2026-11-22_2224_execution.md",
+      "summary": "예외처리 격리, API 페이지네이션/rate limit 대응, 사이클 드리프트 보정, 로그 쓰로틀링 등 핵심 실행 안전장치는 이미 매우 성숙하게 구현되어 있어 치명적인 새 문제는 발견되지 않았고, 진단성 측면에서 사소한 개선 여지만 남아 있다."
     },
     "lstm": {
       "role": "lstm",
       "role_label": "LSTM 분석가",
-      "timestamp": "2026-11-22_2118",
-      "path": "analysis_team/reports/2026-11-22_2118_lstm.md",
-      "summary": "피처 정규화와 파인튠 안전장치의 기본 틀은 잘 잡혀 있으나, 검증 지표가 실제 매매 판단 기준과 다르고 일부 피처가 이상치에 취약해 \"모델 품질 측정\"과 \"실거래 신호 품질\" 사이에 괴리가 생길 수 있다."
+      "timestamp": "2026-11-22_2224",
+      "path": "analysis_team/reports/2026-11-22_2224_lstm.md",
+      "summary": "파인튠 균형(체인 추적+리셋)과 확신구간 기준 롤백은 이미 잘 다뤄져 있고, 모델 구조(SEQ_LEN=60, hidden=32)도 노이즈가 큰 1분봉 데이터 규모에 비해 적절해 보인다. 남은 공백은 ① 피처 구성이 자기 코인의 가격/볼륨 지표에만 갇혀 있는 점, ② 90일 학습 윈도우가"
     },
     "risk": {
       "role": "risk",
       "role_label": "리스크 분석가",
-      "timestamp": "2026-11-22_2118",
-      "path": "analysis_team/reports/2026-11-22_2118_risk.md",
-      "summary": "자금 배분/포지션 사이징 구조는 이전 분석에서 발견된 문제(물타기형 손절선 이동, 드로다운 지표 부재)가 이미 코드에 반영돼 해결돼 있고, 남은 리스크는 \"코인별 균등 배분이 변동성 차이를 반영하지 않는다\"는 구조적 지점 하나로 좁혀진다."
+      "timestamp": "2026-11-22_2224",
+      "path": "analysis_team/reports/2026-11-22_2224_risk.md",
+      "summary": "TRADE_FRACTION 집중 리스크와 물타기형 손절선 후퇴는 구조적으로 이미 잘 억제돼 있고(여러 차례 검증됨), 6코인 균등배분/변동성 불일치 문제도 이미 반복적으로 검토되어 \"운영 데이터 확인 전까지 보류\"로 결정된 상태라 재론하지 않는다. 이번에 새로 짚을 지점은 \"리셋(7일)"
     },
     "storage": {
       "role": "storage",
       "role_label": "데이터/저장소 분석가",
-      "timestamp": "2026-11-22_2118",
-      "path": "analysis_team/reports/2026-11-22_2118_storage.md",
-      "summary": "스키마·인덱스·보관주기(prune)·동시성 처리는 이미 여러 차례 리뷰를 거쳐 쿼리 패턴에 맞게 잘 튜닝되어 있고, 남은 쟁점은 \"prune으로 지운 행이 실제 디스크 공간을 돌려주는가\"와 portfolios 네이밍의 장기 설계 정도다."
+      "timestamp": "2026-11-22_2224",
+      "path": "analysis_team/reports/2026-11-22_2224_storage.md",
+      "summary": "스키마/인덱스/보관주기(prune)/동시성은 이미 수십 차례 리뷰를 거쳐 실제 쿼리 패턴에 맞게 성숙해 있고, 유일하게 보탤 만한 새 포인트는 `portfolios` 네이밍 TODO의 \"영향 범위\"가 실제로는 portfolios 한 테이블이 아니라 4개 테이블 전체라는 점이다."
     },
     "strategy": {
       "role": "strategy",
       "role_label": "전략 분석가",
-      "timestamp": "2026-11-22_2118",
-      "path": "analysis_team/reports/2026-11-22_2118_strategy.md",
-      "summary": "4개 조건식의 개별 로직(크로스, 밴드회귀, 모멘텀전환, 추세돌파)은 구조적으로 타당하지만, 전량 가격 지표에만 의존해 거래량 필터가 전혀 없고, ma_cross_rsi의 급락 시 SELL 억제 로직, 그리고 ma_cross_rsi·macd_momentum 간 파라미터 중첩으로 인한 상"
+      "timestamp": "2026-11-22_2224",
+      "path": "analysis_team/reports/2026-11-22_2224_strategy.md",
+      "summary": "4개 조건식의 매수/매도 로직 자체는 타당하지만, bollinger_rsi의 \"반복 신호\" 구조와 거래량(volume) 정보 미사용, 그리고 3개 추세 전략 간 신호 중복 가능성이 코드 구조상 확인되는 새로운 포인트입니다. (파라미터가 일봉 기준값이라는 점은 이미 2026-11-22 리"
     },
     "synthesizer": {
       "role": "synthesizer",
       "role_label": "종합 조정자",
-      "timestamp": "2026-11-22_2118",
-      "path": "analysis_team/reports/2026-11-22_2118_synthesizer.md",
-      "summary": "**1. 사이클 지연 진단 로깅 추가 (execution)** — `data_fetcher.py` docstring을 실제 소요시간(최대 7~8분)에 맞게 현실화하고 force_full 적용 코인 수를 로깅, `main_loop.py`의 사이클 지연 경고를 \"캔들 수집\" vs \"전략계산"
+      "timestamp": "2026-11-22_2224",
+      "path": "analysis_team/reports/2026-11-22_2224_synthesizer.md",
+      "summary": "**1. bollinger_rsi 엣지 트리거화 (strategy 리포트 제안1, strategies.py 225~258행)**"
     }
   }
 }
