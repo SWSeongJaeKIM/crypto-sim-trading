@@ -26,14 +26,21 @@ from typing import Optional
 
 import pandas as pd
 
+# COINS는 portfolio.py가 단일 소스(single source of truth)다. 예전에는 이
+# 파일에도 COINS를 똑같이 하드코딩해 두 곳이 따로 관리됐는데, 한쪽만(예:
+# portfolio.py에 코인 추가) 고치면 main_loop.py(portfolio.COINS를 import)가
+# 기대하는 코인 집합과 이 모듈이 실제로 수집하는 코인 집합이 조용히
+# 어긋나는 위험이 있었다 (analysis_team execution 리포트 2026-11-22_1723
+# 발견점 #3). portfolio.py는 표준 라이브러리만 import하므로 순환 import는
+# 없다.
+from portfolio import COINS
+
 log = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).parent / "data_cache"
 DATA_DIR.mkdir(exist_ok=True)
 
 UPBIT_BASE = "https://api.upbit.com"
-
-COINS = ["BTC", "ETH", "XRP", "SOL", "DOGE", "ADA"]
 
 UPBIT_MARKETS = {
     "BTC": "KRW-BTC",
