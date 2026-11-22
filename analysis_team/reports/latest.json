@@ -1,47 +1,47 @@
 {
-  "generated_at": "2026-11-22_0718",
+  "generated_at": "2026-11-22_0818",
   "roles": {
     "execution": {
       "role": "execution",
       "role_label": "실행/버그 분석가",
-      "timestamp": "2026-11-22_0718",
-      "path": "analysis_team/reports/2026-11-22_0718_execution.md",
-      "summary": "예외처리 격리, 로깅 쓰로틀링, 60초 사이클 드리프트 보정은 이미 여러 차례의 자체 분석을 거쳐 견고하게 구현돼 있어 이번 검토에서도 사이클을 죽이는 새로운 치명적 결함은 없었다. 다만 (1) 과거 리포트(2026-11-22_0618)가 지적했던 \"재학습마다 90일 전체 재수집\" 구조"
+      "timestamp": "2026-11-22_0818",
+      "path": "analysis_team/reports/2026-11-22_0818_execution.md",
+      "summary": "예외 처리·로깅·Upbit 호출 패턴은 이미 여러 차례의 분석팀 피드백을 거쳐 상당히 체계적으로 다듬어져 있으며, 새로 지적할 만한 결함은 거의 없다. 다만 \"재학습 구간 동안 손절/강제청산 체크가 완전히 멈춘다\"는 사실이 운영자에게 명시적으로 드러나지 않는 점은 보완할 가치가 있다."
     },
     "lstm": {
       "role": "lstm",
       "role_label": "LSTM 분석가",
-      "timestamp": "2026-11-22_0718",
-      "path": "analysis_team/reports/2026-11-22_0718_lstm.md",
-      "summary": "특징(feature) 구성·파인튠 전략·재학습 주기는 이미 과거 analysis_team 제안(체인 길이 리셋, val_acc 롤백 등)이 반영되어 전반적으로 잘 잡혀 있으나, 6개 코인이 같은 루프에서 동시에 수집됨에도 각 코인 모델이 BTC 등 타 코인과의 동행성 신호를 전혀 쓰지 "
+      "timestamp": "2026-11-22_0818",
+      "path": "analysis_team/reports/2026-11-22_0818_lstm.md",
+      "summary": "피처 구성과 모델 구조(SEQ_LEN=60, hidden=32)는 데이터 규모와 문제 난이도에 비해 과하지도 부족하지도 않게 설계되어 있고, 파인튠 안전장치(lr 감소, val_acc 롤백, 체인 길이 추적)도 이미 갖춰져 있다. 다만 질문에 전제된 \"재학습 하루 1회·학습기간 30일\""
     },
     "risk": {
       "role": "risk",
       "role_label": "리스크 분석가",
-      "timestamp": "2026-11-22_0718",
-      "path": "analysis_team/reports/2026-11-22_0718_risk.md",
-      "summary": "`TRADE_FRACTION`은 실제로는 고정 50%가 아니라 확신도 기반 10~90% 가변 비율이고 코인 슬롯이 완전히 분리되어 있어 포트폴리오 차원의 집중 리스크는 이미 억제되어 있다. 다만 코인별 변동성 차이를 반영하지 않는 균등 배분/동일 손절폭, 그리고 손절 전까지 반복 매수로"
+      "timestamp": "2026-11-22_0818",
+      "path": "analysis_team/reports/2026-11-22_0818_risk.md",
+      "summary": "TRADE_FRACTION은 실제로는 고정 50%가 아니라 확신도에 따라 10~90%로 움직이고 코인별 1/6 슬롯 안에서만 작동해 전체 포트폴리오 집중 리스크는 설계상 이미 억제돼 있으며, 물타기형 손절 지연 문제도 `first_entry_price_krw` 고정 로직으로 이미 수정돼"
     },
     "storage": {
       "role": "storage",
       "role_label": "데이터/저장소 분석가",
-      "timestamp": "2026-11-22_0718",
-      "path": "analysis_team/reports/2026-11-22_0718_storage.md",
-      "summary": "schema/인덱스/동시성(WAL+재시도)/append-only 테이블 보관주기(prune)는 이미 여러 차례 리뷰를 거쳐 실제 쿼리 패턴에 잘 맞게 다듬어진 상태이며, 치명적 문제는 보이지 않는다. 유일하게 남은 공백은 `trades` 테이블에만 보관주기 정책이 없다는 점이다."
+      "timestamp": "2026-11-22_0818",
+      "path": "analysis_team/reports/2026-11-22_0818_storage.md",
+      "summary": "스키마/인덱스, append-only 테이블 보관주기(prune), 동시 쓰기/읽기 충돌 방지는 과거 분석팀 제안이 이미 충실히 반영되어 안정적인 상태이고, 남은 것은 portfolios 합성키의 장기 스키마 개선 여지와 trades 테이블의 보관정책 미결정 정도다."
     },
     "strategy": {
       "role": "strategy",
       "role_label": "전략 분석가",
-      "timestamp": "2026-11-22_0718",
-      "path": "analysis_team/reports/2026-11-22_0718_strategy.md",
-      "summary": "4개 조건식 모두 \"일봉용 표준 지표\"를 1분봉에 그대로 얹었고, OHLCV에 포함된 `volume` 컬럼을 전혀 쓰지 않아 저유동성·급변동 구간에서 오신호 위험이 있다. 또한 4개 중 3개(ma_cross_rsi, macd_momentum, trend_follow)는 본질적으로 같은 "
+      "timestamp": "2026-11-22_0818",
+      "path": "analysis_team/reports/2026-11-22_0818_strategy.md",
+      "summary": "4개 조건식의 로직 자체는 타당하지만, 파라미터는 일봉/스윙 트레이딩의 교과서적 표준값을 그대로 가져왔고, ma_cross_rsi·macd_momentum은 사실상 같은 이동평균 크로스 신호를 중복 생성하며, volume 컬럼이 어느 전략에서도 전혀 사용되지 않아 저유동성 구간 필터가 "
     },
     "synthesizer": {
       "role": "synthesizer",
       "role_label": "종합 조정자",
-      "timestamp": "2026-11-22_0718",
-      "path": "analysis_team/reports/2026-11-22_0718_synthesizer.md",
-      "summary": "1. **execution: 핫패스 경미 개선 2건 (즉시 적용, 리스크 거의 없음)**"
+      "timestamp": "2026-11-22_0818",
+      "path": "analysis_team/reports/2026-11-22_0818_synthesizer.md",
+      "summary": "1. **lstm 재학습 설정값 실측 확인** (lstm 리포트 제안, 근거: lstm_model.py 주석과 가정 불일치) — main_loop.py에서 RETRAIN_TIMES_LOCAL/HISTORY_DAYS_FOR_TRAIN 실제값을 확인하는 단순 조사 작업으로, 코드 변경이 전"
     }
   }
 }
