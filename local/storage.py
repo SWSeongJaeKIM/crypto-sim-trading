@@ -274,6 +274,14 @@ def connect(db_path: Path | str = DB_PATH):
     # 리포트 2026-11-21_2320 제안).
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+    # SQLite 기본값(case_sensitive_like=OFF)에서는 prefix LIKE가 idx_trades_reason
+    # 인덱스를 전혀 타지 않고 trades 테이블을 매번 전체 스캔한다(EXPLAIN QUERY PLAN으로
+    # 확인됨, analysis_team storage 리포트 2026-11-22_1518). 이 설정을 켜면
+    # stop_loss_counts_by_coin()의 LIKE가 인덱스를 타게 된다. 이 프로젝트에서 LIKE를
+    # 쓰는 곳은 '손절%'/'강제청산%' 고정 한글 접두어 매칭 2곳뿐이라 대소문자 구분
+    # 여부가 결과에 영향을 주지 않는다 — 새로 대소문자 무시가 필요한 LIKE를
+    # 추가하게 되면 이 pragma와 충돌하는지 먼저 확인할 것.
+    conn.execute("PRAGMA case_sensitive_like=ON")
     try:
         if key not in _schema_initialized_paths:
             conn.executescript(SCHEMA)
