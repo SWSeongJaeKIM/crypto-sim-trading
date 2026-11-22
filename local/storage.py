@@ -555,3 +555,44 @@ def prediction_accuracy_by_coin(conn, limit_per_coin: int = 500) -> list[dict]:
             "accuracy": round(correct / total, 4) if total else None,
         })
     return out
+
+
+def stop_loss_counts_by_coin(conn) -> list[dict]:
+    """코인별 손절/강제청산 발생 횟수 집계 (기록용 — 트레이딩 로직은 전혀
+    건드리지 않는 순수 조회).
+
+    trades.side만으로는 손절 여부를 구분할 수 없다 — portfolio.py 기준
+    롱 손절은 side="SELL"(일반 매도 신호와 동일), 숏 손절은
+    side="SHORT_CLOSE"(일반 숏 청산과 동일), 숏 강제청산만 별도로
+    side="SHORT_LIQUIDATED"다. 반면 check_stop_loss_and_liquidation()이
+    남기는 reason은 항상 "손절 (...)" 또는 "강제청산 (...)"으로 시작하고,
+    그 외 모든 거래(신호 매수/매도, 숏 진입, 숏->롱 전환 등)의 reason은
+    이 두 접두어로 시작하지 않으므로 reason 접두어가 유일하게 믿을 수 있는
+    구분 기준이다.
+
+    지금 당장 코인별 손절선/배분을 바꾸기 위한 함수가 아니라, "변동성이 큰
+    코인(예: DOGE)이 실제로 다른 코인보다 몇 배 더 자주 손절에 걸리는가"를
+    먼저 데이터로 쌓아두기 위한 것이다 — 손절선/배분 자체를 바꾸는 건 실제
+    운영 데이터를 봐야 판단 가능하다는 전제가 깔려 있다 (analysis_team risk
+    리포트 2026-11-22_0517 구체적 제안 #2, synthesizer Top3 #3)."""
+    rows = conn.execute(
+        """
+        SELECT coin,
+               SUM(CASE WHEN reason LIKE '손절%' THEN 1 ELSE 0 END) AS stop_loss_count,
+               SUM(CASE WHEN reason LIKE '강제청산%' THEN 1 ELSE 0 END) AS liquidation_count,
+               COUNT(*) AS total_count
+        FROM trades
+        WHERE reason LIKE '손절%' OR reason LIKE '강제청산%'
+        GROUP BY coin
+        ORDER BY total_count DESC
+        """
+    ).fetchall()
+    return [
+        {
+            "coin": r["coin"],
+            "stop_loss_count": r["stop_loss_count"] or 0,
+            "liquidation_count": r["liquidation_count"] or 0,
+            "total_count": r["total_count"],
+        }
+        for r in rows
+    ]
