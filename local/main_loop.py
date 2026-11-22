@@ -605,9 +605,22 @@ def main():
     # 메모리 변수가 아니라 storage에 저장된 마지막 재학습 시각으로
     # 시작한다 — main_loop.py를 재시작해도 "이번 슬롯을 이미 했는지"를 안다.
     # (바로 위에서 최초 학습을 했다면 그 기록이 여기서 바로 "방금"으로 잡힌다.)
-    with storage.connect() as conn:
-        last_retrain_at = last_retrain_at_from_storage(conn)
-        last_prune_date = last_predictions_prune_date_from_storage(conn)
+    # while 루프 안의 모든 storage.connect() 호출(사이클/재학습/prune)은 각자
+    # try/except로 보호돼 있는데, 이 최초 조회는 보호가 없어서 DB 파일 손상이나
+    # 디스크 I/O 에러가 나면 while 루프에 들어가기도 전에 프로세스 전체가 죽는
+    # 문제가 있었다 (analysis_team execution 리포트 2026-11-22_0221). 실패해도
+    # None으로 두고 계속 진행 — 최초 재학습 타이밍이 다소 늦어질 뿐(다음 사이클에
+    # retrain_is_due(None)이 True가 되어 곧 재학습됨) 매매 자체는 영향받지 않는다.
+    # 무한 재시도로 흐르지 않도록(매 사이클 반복 조회가 아니라) 여기서 최초
+    # 1회만 수행하는 범위로 제한한다.
+    try:
+        with storage.connect() as conn:
+            last_retrain_at = last_retrain_at_from_storage(conn)
+            last_prune_date = last_predictions_prune_date_from_storage(conn)
+    except Exception as e:
+        log.exception(f"마지막 재학습/prune 기록 조회 중 에러 (초기값 없이 계속 진행): {e}")
+        last_retrain_at = None
+        last_prune_date = None
     if last_retrain_at:
         log.info(f"마지막 LSTM 재학습: {last_retrain_at} (저장된 기록 기준)")
     log.info(f"LSTM 재학습 스케줄: 매일 {', '.join(f'{h:02d}:{m:02d}' for h, m in RETRAIN_TIMES_LOCAL)} (하루 {len(RETRAIN_TIMES_LOCAL)}회)")
