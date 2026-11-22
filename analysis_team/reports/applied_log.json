@@ -1534,5 +1534,93 @@
     "decision": "skipped",
     "reason": "두 제안(strategy 기간단축, lstm 시간대 피처) 모두 위에서 개별적으로 보류 처리되어 충돌 자체가 발생하지 않음. synthesizer가 제안한 선행조건(재학습 비동기화 또는 증분 데이터 수집)인 execution의 fetch_minute_history 증분 수집 제안도 통합테스트 리스크로 이번 회차에 보류 — 세 제안 모두 다음 회차 이후 사람이 순서를 정해 단계적으로 검토해야 함.",
     "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0718",
+    "proposal": "_http_get_json()에서 마지막 재시도(attempt == retries-1) 실패 후에도 불필요하게 sleep하던 것을 제거 (attempt < retries-1일 때만 sleep)",
+    "role": "execution (synthesizer Top3 #1)",
+    "decision": "applied",
+    "reason": "명백한 비효율 수정이며 매매 판단(진입/청산 조건, 베팅 비율, 손절 기준)을 전혀 바꾸지 않음. 기존 로직 구조를 바꾸지 않는 국소 수정이라 부작용이 거의 없고, urlopen을 모킹한 스크립트로 재시도 3회 중 마지막 시도 후 sleep이 호출되지 않음(총 sleep 호출 2회)을 확인해 효과를 코드 리뷰+시뮬레이션만으로 검증 완료.",
+    "commit": "9fc30ac"
+  },
+  {
+    "timestamp": "2026-11-22_0718",
+    "proposal": "fetch_all_latest_candles()의 6코인 동시 실시간 캔들 수집 경로에 fetch_all_minute_history와 동일한 공유 _RateLimiter 적용 (설계 비대칭 해소)",
+    "role": "execution (synthesizer Top3 #1)",
+    "decision": "applied",
+    "reason": "매매 판단을 바꾸지 않는 네트워크 호출 패턴 개선이며, 기존 fetch_minute_history의 rate_limiter 파라미터 패턴을 그대로 재사용해 설계 일관성을 맞춤. 간격을 0.02초로 짧게 잡아 전체 사이클 길이에 미치는 영향(6코인 기준 최대 ~0.1초 추가)을 최소화했고, rate_limiter 인자는 기본값 None으로 기존 단독 호출 동작을 그대로 유지해 하위 호환. 모킹 스크립트로 (1)기존 단독 호출 동작 불변, (2)6코인 요청이 간격을 두고 분산됨(spread ≈0.1초)을 확인.",
+    "commit": "70873af"
+  },
+  {
+    "timestamp": "2026-11-22_0718",
+    "proposal": "LSTM 재학습마다 90일치 1분봉을 캐시 없이 매번 전체 재수집하는 구조를 캐시 기준 증분 수집(since 파라미터)으로 변경",
+    "role": "execution",
+    "decision": "skipped",
+    "reason": "상시 의존 핵심 데이터 파이프라인(fetch_minute_history 시그니처, 캐시 병합, 공백 감지 가드)을 바꾸는 제안이고, 리포트 스스로 'Upbit 응답 경계값에 대한 실제 테스트 없이 적용하면 기존 동작을 깨뜨릴 위험이 있다'고 명시. applied_log 과거 회차(2026-11-22_0618 등)에서도 동일 제안이 같은 이유로 반복 보류됨 — 일관된 결론 유지. 통합 테스트 계획과 함께 사람이 직접 검토 필요.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0718",
+    "proposal": "lstm_model.py의 FEATURE_COLS에 market_ret(BTC 등 타 코인 동행성) 피처 추가, train_model/build_dataset에 market_df 전달",
+    "role": "lstm",
+    "decision": "skipped",
+    "reason": "N_FEATURES(입력 차원)가 바뀌어 기존 저장 가중치(.pt)와 불일치가 생기므로 전체 코인 강제 전면 재학습이 필요하고, 그 사이 신호 공백/구버전 모델 혼용 위험이 생김. 또한 리포트 스스로 'market_ret이 코인 고유 신호를 희석시켜 성능이 떨어질 수도 있다 — 적용 전후 val_accuracy 비교(운영 데이터)가 필요'라고 명시해 효과를 코드 리뷰만으로 검증 불가. synthesizer도 execution이 지적한 재학습 동기 블로킹 문제 해소가 선행돼야 한다고 판단해 이번 회차 Top3에서 제외함 — 동일 결론으로 보류.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0718",
+    "proposal": "portfolio.py의 LEVERAGE/STOP_LOSS_PCT를 코인별 딕셔너리(STOP_LOSS_PCT_BY_COIN 등)로 바꿔 변동성(ATR) 기반 차등 손절폭 적용",
+    "role": "risk",
+    "decision": "skipped",
+    "reason": "매매 전략의 핵심 판단(손절 기준)을 바꾸는 제안이며, 변동성 추정치 자체의 유효성(과거 변동성이 미래를 대표하는지)은 실제 운영 데이터로만 검증 가능 — 리포트도 '추정치 오류가 새로운 리스크를 만들 수 있다'고 명시. synthesizer도 '효과는 크지만 구현 범위가 넓어 다음 회차로 미루는 것을 권장'이라고 차순위로 분류함 — 동일 결론으로 보류.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0718",
+    "proposal": "storage.add_snapshot() 호출부에서 롤링 최대값 대비 drawdown_pct(MDD)를 계산해 snapshots 테이블에 같이 기록",
+    "role": "risk (synthesizer Top3 #2)",
+    "decision": "skipped",
+    "reason": "synthesizer는 '관측용, 비침투적'이라 평가했으나, 검토해보니 (1) snapshots에 새 컬럼을 추가하려면 상시 실행 중인 main_loop.py가 60초마다 쓰는 테이블에 ALTER TABLE 스키마 변경이 필요해 판단기준 5번(스키마 마이그레이션은 사람이 직접 판단)에 해당하고, (2) 정확한 롤링 최대값을 매 사이클 효율적으로 구하려면 snapshots 전체 스캔(코인/전략 수 × 보관 기간에 비례해 커짐, 과거 trades.reason 전체스캔 버그와 같은 성격의 성능 회귀 위험)을 피하기 위해 meta 테이블에 peak 값을 별도 유지하는 추가 설계가 필요해 '단순 추가'로 보기 어렵다. 또한 dashboard.py가 현재 snapshots 테이블을 전혀 조회하지 않아(포트폴리오 현재 상태만 표시) 지금 당장의 가시성 이득도 없음. 스키마 변경 없이(meta 테이블 활용 등) 안전하게 구현하는 방법을 사람이 직접 설계해 다음 회차 이후 반영하는 것을 권장.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0718",
+    "proposal": "strategies.py 4개 조건식의 BUY/SELL 분기에 df['volume'] 기반 저유동성 필터(평균 거래량 대비 과소 시 HOLD) 공통 추가",
+    "role": "strategy (synthesizer Top3 #3)",
+    "decision": "skipped",
+    "reason": "매매 전략의 핵심 판단(진입/청산 조건)을 바꾸는 제안. synthesizer는 Top3로 선정했으나 strategy 리포트 자체의 리스크/트레이드오프 절이 '실제로 이 조치들이 전체 수익성에 긍정적인지는 백테스트/실거래 데이터를 봐야 판단 가능하며, 이는 실제 운영 데이터가 필요한 영역이라 이 리포트에서는 판단하지 않는다'고 명시 — 판단기준 5번(리포트가 운영 데이터 필요성을 스스로 명시한 제안은 반영하지 않음)에 정확히 해당. 2026-11-22_0517/0618 회차에서도 동일 성격의 거래량 필터 제안이 같은 이유로 반복 보류됨 — 일관된 결론 유지.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0718",
+    "proposal": "BollingerRSIStrategy 등 BUY 조건에 '직전 캔들 양봉 확인'(close.iloc[-1] > close.iloc[-2]) 추가해 하락 중 매수(떨어지는 칼 잡기) 완화",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "진입 조건(핵심 판단)을 바꾸는 제안이며, 리포트 스스로 '신호 지연을 유발해 일부 빠른 반등을 놓칠 수 있음'을 리스크로 명시 — 순효과는 백테스트/운영 데이터가 필요해 코드 리뷰만으로 검증 불가. 보류.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0718",
+    "proposal": "MACrossRSIStrategy/MACDStrategy의 윈도우(short/long, 12/26/9 등)를 1분봉에 맞게 확대하거나 ATR 기반 변동성 필터 추가",
+    "role": "strategy",
+    "decision": "skipped",
+    "reason": "진입조건 파라미터(임계값)를 바꾸는 제안이며, 리포트 스스로 '윈도우를 늘리면 노이즈는 줄지만 추세 포착이 느려져 초반 수익 구간을 놓칠 수 있다'고 명시해 순효과는 백테스트가 필요. 보류.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0718",
+    "proposal": "(역할 간 긴장관계, synthesizer 기록) lstm의 market_ret 피처 확장을 execution이 지적한 재학습 동기 블로킹 문제보다 먼저 적용하면 사이클 정지 시간이 더 길어질 수 있음",
+    "role": "synthesizer",
+    "decision": "skipped",
+    "reason": "lstm의 market_ret 제안과 execution의 재학습 증분 수집 제안 모두 위에서 개별적으로 보류 처리되어 충돌 자체가 발생하지 않음. synthesizer가 제시한 순서(재학습 비동기화/증분 수집 선행 → lstm 피처 확장)대로, 두 제안 모두 다음 회차 이후 사람이 순서를 정해 단계적으로 검토해야 함.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_0718",
+    "proposal": "(storage) trades 테이블에 prune/archive 정책 추가",
+    "role": "storage",
+    "decision": "skipped",
+    "reason": "리포트 자체가 '지금 당장 prune_trades를 추가하라고 권하지는 않음'이라고 명시하고, trades 삭제/아카이브는 과거 손익/손절 통계를 복원 불가능하게 만들 위험이 있어 실제 증가 속도(운영 DB)를 봐야 판단 가능하다고 결론. 이번 회차에서는 조치하지 않음.",
+    "commit": null
   }
 ]
