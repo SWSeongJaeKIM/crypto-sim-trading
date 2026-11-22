@@ -23,8 +23,10 @@ import urllib.request
 
 from flask import Flask, jsonify, render_template_string
 
+import lstm_model
 import portfolio
 import storage
+import verify_ledger
 
 app = Flask(__name__)
 
@@ -188,6 +190,7 @@ PAGE = """
   <div class="tabs">
     <button class="tab-btn active" id="tab-btn-trading" onclick="showTab('trading')">모의투자</button>
     <button class="tab-btn" id="tab-btn-analysis" onclick="showTab('analysis')">🤖 AI 분석팀</button>
+    <button class="tab-btn" id="tab-btn-verify" onclick="showTab('verify')">🔍 원장 검증</button>
   </div>
 
   <div class="tab-page active" id="tab-trading">
@@ -243,13 +246,26 @@ PAGE = """
     <div id="analysis-roles"></div>
   </div>
 
+  <div class="tab-page" id="tab-verify">
+    <div class="sub" id="verify-status">불러오는 중...</div>
+
+    <h3>🧠 자동매매 AI(LSTM) 모델 구조</h3>
+    <div class="card" id="model-info-card" style="margin-bottom:20px;"></div>
+
+    <h3>거래 원장 ↔ 포트폴리오 정합성 검증 <span style="color:#9aa0a6;font-weight:400;font-size:12px;">(기록된 거래들만으로 지금 저장된 cash/보유량/수익률이 전부 설명되는지 재계산해서 대조 — "이 전략의 수익이 말이 안 된다" 싶을 때 가장 먼저 볼 곳)</span></h3>
+    <div id="verify-results"></div>
+  </div>
+
 <script>
 function showTab(name) {
   document.getElementById('tab-trading').classList.toggle('active', name === 'trading');
   document.getElementById('tab-analysis').classList.toggle('active', name === 'analysis');
+  document.getElementById('tab-verify').classList.toggle('active', name === 'verify');
   document.getElementById('tab-btn-trading').classList.toggle('active', name === 'trading');
   document.getElementById('tab-btn-analysis').classList.toggle('active', name === 'analysis');
+  document.getElementById('tab-btn-verify').classList.toggle('active', name === 'verify');
   if (name === 'analysis') loadAnalysis();
+  if (name === 'verify') loadVerify();
 }
 
 let lastTradesData = null;  // 마지막으로 받은 d.trades — 필터 select를 바꿀 때 재요청 없이 다시 그리는 데 사용
@@ -584,6 +600,76 @@ async function loadAnalysis() {
     renderRound(d.reports, d.index.roles);
   }
 }
+const VERIFY_LABELS = {
+  duplicates: '중복 거래',
+  qty_anomalies: '보유량 초과 매도/청산',
+  reconciliation_issues: '최종 상태 대조 불일치',
+  stop_loss_issues: '손절/강제청산 reason 임계값 불일치',
+};
+
+function renderVerifyIssueList(items, label) {
+  if (!items || !items.length) return '';
+  const rows = items.slice(0, 20).map(it =>
+    `<div style="padding:4px 0; border-bottom:1px solid #22252c; font-family:monospace; font-size:12px; color:#d1d5db;">${JSON.stringify(it)}</div>`
+  ).join('');
+  return `<div style="margin-top:10px;"><div style="color:#f87171; font-size:13px; font-weight:600;">⚠ ${label} (${items.length}건)</div>${rows}</div>`;
+}
+
+function renderVerify(data) {
+  const mi = data.model_info || {};
+  document.getElementById('model-info-card').innerHTML = `
+    <div style="color:#d1d5db; font-size:13px; line-height:1.8;">
+      종류: ${mi.architecture || '-'} (hidden=${mi.hidden_size ?? '-'}, layers=${mi.num_layers ?? '-'})<br>
+      입력 시퀀스 길이: 과거 ${mi.seq_len_minutes ?? '-'}분<br>
+      입력 피처(${mi.n_features ?? '-'}개): ${(mi.feature_cols || []).join(', ')}<br>
+      <span style="color:#6b7280; font-size:12px;">※ 코드에 고정된 아키텍처 정보. 실제 학습 시각/정확도 추이는 위 "모의투자" 탭의 "LSTM 모델 학습 기록" 표 참고.</span>
+    </div>`;
+
+  const resultsEl = document.getElementById('verify-results');
+  resultsEl.innerHTML = '';
+  for (const r of (data.results || [])) {
+    if (!r.found) {
+      resultsEl.innerHTML += `<div class="card" style="margin-bottom:10px;"><h3>${r.key}</h3><div style="color:#9aa0a6;">${r.note}</div></div>`;
+      continue;
+    }
+    const badgeHtml = r.ok
+      ? `<span class="pnl-pos" style="font-size:13px;">✓ 이상 없음</span>`
+      : `<span class="pnl-neg" style="font-size:13px;">⚠ 확인 필요</span>`;
+    let issuesHtml = '';
+    for (const field of ['duplicates', 'qty_anomalies', 'reconciliation_issues', 'stop_loss_issues']) {
+      issuesHtml += renderVerifyIssueList(r[field], VERIFY_LABELS[field]);
+    }
+    if (r.pnl_jump_flags && r.pnl_jump_flags.length) {
+      issuesHtml += renderVerifyIssueList(r.pnl_jump_flags, '수익률 급변 구간(버그 확정 아님, 참고용)');
+    }
+    resultsEl.innerHTML += `
+      <div class="card" style="margin-bottom:10px;">
+        <h3>${r.strategy} <span style="color:#9aa0a6; font-weight:400; font-size:12px;">(${r.variant === 'reset' ? '리셋' : '누적'})</span> ${badgeHtml}</h3>
+        <div style="color:#9aa0a6; font-size:12px;">${r.scope_note}</div>
+        ${issuesHtml}
+      </div>`;
+  }
+  if (!(data.results || []).length) {
+    resultsEl.innerHTML = '<div style="color:#9aa0a6;">검증할 포트폴리오가 아직 없습니다.</div>';
+  }
+}
+
+async function loadVerify() {
+  const statusEl = document.getElementById('verify-status');
+  statusEl.innerText = '검증 중...';
+  try {
+    const res = await fetch('/api/verify');
+    const d = await res.json();
+    renderVerify(d);
+    const okCount = (d.results || []).filter(r => r.found && r.ok).length;
+    const totalCount = (d.results || []).filter(r => r.found).length;
+    statusEl.innerText = `${totalCount}개 전략×모드 중 ${okCount}개 정상 — 거래 기록과 포트폴리오 문서 대조 기준 `
+      + `(가격이 그 시각 실제 시세였는지는 별도 확인 필요)`;
+  } catch (e) {
+    statusEl.innerText = '검증 중 오류가 발생했습니다.';
+  }
+}
+
 async function load() {
   const res = await fetch('/api/data');
   const d = await res.json();
@@ -647,6 +733,11 @@ setInterval(tickProgressDisplay, 1000);  // "N초 전" 텍스트만 1초마다 �
 setInterval(() => {
   if (document.getElementById('tab-analysis').classList.contains('active')) loadAnalysis();
 }, 5 * 60 * 1000);
+// 원장 검증은 거래가 쌓일 때만 결과가 바뀌므로 분석팀 탭과 동일하게 5분 간격,
+// 지금 이 탭을 보고 있을 때만 갱신한다.
+setInterval(() => {
+  if (document.getElementById('tab-verify').classList.contains('active')) loadVerify();
+}, 5 * 60 * 1000);
 </script>
 </body>
 </html>
@@ -677,6 +768,38 @@ def api_analysis_round(timestamp: str):
     if not re.match(r"^\d{4}-\d{2}-\d{2}_\d{4}$", timestamp):
         return jsonify({"error": "잘못된 타임스탬프 형식"}), 400
     return jsonify({"timestamp": timestamp, "reports": get_analysis_round(timestamp)})
+
+
+@app.route("/api/verify")
+def api_verify():
+    """거래 원장(trades) ↔ 포트폴리오 문서 정합성 검증 — verify_ledger.py의
+    analyze_key()를 그대로 재사용한다(CLI와 대시보드가 서로 다른 로직을 갖지
+    않도록 한 곳으로 모음). 읽기 전용 조회이며 trading.db를 수정하지 않는다.
+
+    자동매매 AI(LSTM) 모델 구조 정보도 같이 내려준다 — 실제 학습 이력(시각,
+    정확도 추이)은 이미 '모의투자' 탭의 "LSTM 모델 학습 기록" 표가 보여주므로,
+    여기서는 코드에 고정된 아키텍처 설정(hidden/layers/피처 등)만 노출한다.
+    LSTMClassifier의 실제 기본값을 하드코딩하지 않고 inspect로 직접 읽어서,
+    나중에 그 기본값이 바뀌어도 이 라우트를 따로 고칠 필요가 없게 한다."""
+    import inspect
+    init_params = inspect.signature(lstm_model.LSTMClassifier.__init__).parameters
+
+    with storage.connect() as conn:
+        keys = verify_ledger.list_all_keys(conn)
+        results = [verify_ledger.analyze_key(conn, k) for k in keys]
+
+    return jsonify({
+        "results": results,
+        "model_info": {
+            "model_type": "lstm",
+            "architecture": "단일 레이어 LSTM (PyTorch nn.LSTM 기반 자체 학습 모델 — 외부 사전학습 모델 아님)",
+            "hidden_size": init_params["hidden"].default,
+            "num_layers": init_params["layers"].default,
+            "seq_len_minutes": lstm_model.SEQ_LEN,
+            "n_features": lstm_model.N_FEATURES,
+            "feature_cols": lstm_model.FEATURE_COLS,
+        },
+    })
 
 
 @app.route("/api/data")
