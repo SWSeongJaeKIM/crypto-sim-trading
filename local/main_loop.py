@@ -85,6 +85,15 @@ PORTFOLIO_MODES = ["reset", "cumulative"]
 # synthesizer Top3 #1). 매 사이클(1분 간격) 무조건 찍으면 로그가 금방 폭주하므로
 # 임계치 초과 시에만 남긴다.
 CYCLE_ELAPSED_WARN_THRESHOLD_SEC = 30
+# 일별 prune 블록(아래 "if last_prune_date != today_str:")은 CYCLE_ELAPSED_WARN_
+# THRESHOLD_SEC 드리프트 경고에서 의도적으로 제외돼 있어(_prune_attempted_
+# this_iteration 플래그), prune 자체가 평소보다 훨씬 오래 걸려도(장기 미실행 후
+# 첫 정리, 디스크 I/O 저하 등) run.log에는 "삭제 건수"만 남고 "얼마나 걸렸는지"는
+# 전혀 남지 않았다 — retrain_lstm()이 소요시간을 로깅하는 것과 비대칭적이었다.
+# 드리프트 경고 제외 결정은 그대로 두고, prune 자체 소요시간만 별도로 보이게
+# 한다 (analysis_team execution 리포트 2026-11-22_2318 발견점 #1, synthesizer
+# Top3 #2).
+PRUNE_ELAPSED_WARN_THRESHOLD_SEC = 30
 # "영구 이어학습(finetune=True 기본값)" 구조에서는 전체 재학습(finetune=False)이
 # 자동으로 트리거되지 않아, 연속 파인튠이 계속 누적되면 가중치가 특정 구간
 # 패턴에 고착될 위험이 있다 — lstm_model.py가 이미 meta.json에
@@ -919,6 +928,7 @@ def main():
             # 실행한다. 거래/손절 판단에 쓰는 로직은 전혀 건드리지 않고,
             # 이미 확정된(resolved=1) 오래된 예측 기록만 지운다.
             _prune_attempted_this_iteration = True
+            _prune_started = time.monotonic()
             try:
                 with storage.connect() as conn:
                     n_pruned = storage.prune_predictions(conn, keep_days=PREDICTIONS_PRUNE_KEEP_DAYS)
@@ -957,11 +967,19 @@ def main():
                         "slot_values_rows_deleted": n_pruned_slot_values,
                     })
                 last_prune_date = today_str
+                _prune_elapsed = time.monotonic() - _prune_started
                 log.info(f"predictions 보관주기 정리 완료: {n_pruned}건 삭제 (keep_days={PREDICTIONS_PRUNE_KEEP_DAYS}), "
                          f"snapshots {n_pruned_snapshots}건 삭제 (keep_days={SNAPSHOTS_PRUNE_KEEP_DAYS}), "
                          f"model_trainings {n_pruned_trainings}건 삭제 (keep_days={MODEL_TRAININGS_PRUNE_KEEP_DAYS}, trained=0만 대상), "
                          f"미확정 고아 predictions {n_pruned_stale_unresolved}건 삭제 (keep_days={STALE_UNRESOLVED_PREDICTIONS_KEEP_DAYS}), "
-                         f"slot_values {n_pruned_slot_values}건 삭제 (keep_days={SLOT_VALUES_PRUNE_KEEP_DAYS})")
+                         f"slot_values {n_pruned_slot_values}건 삭제 (keep_days={SLOT_VALUES_PRUNE_KEEP_DAYS}), "
+                         f"소요 {_prune_elapsed:.1f}초")
+                # 60초 주기 드리프트 경고(CYCLE_ELAPSED_WARN_THRESHOLD_SEC)는 prune 사이클을
+                # 의도적으로 제외하므로, prune 자체가 느려지는 상황은 별도 경고로 남긴다.
+                if _prune_elapsed > PRUNE_ELAPSED_WARN_THRESHOLD_SEC:
+                    log.warning(f"predictions/snapshots 보관주기 정리가 {_prune_elapsed:.1f}초 걸림 "
+                                f"(임계값 {PRUNE_ELAPSED_WARN_THRESHOLD_SEC}초 초과) — 디스크 I/O 저하나 "
+                                f"장기 미실행 후 첫 정리일 수 있음")
             except Exception as e:
                 log.exception(f"predictions/snapshots 보관주기 정리 중 에러 (다음 사이클에 재시도): {e}")
 
