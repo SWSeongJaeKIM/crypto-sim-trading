@@ -67,6 +67,12 @@ STALE_UNRESOLVED_PREDICTIONS_KEEP_DAYS = 7  # predictions 중 resolved=0(미확�
                                    # resolved=1 대상)와는 별개 — 정상 케이스는 1사이클(1분)
                                    # 안에 확정되므로 7일이면 충분히 넉넉하다. 자세한 이유는
                                    # storage.prune_stale_unresolved_predictions() docstring 참고.
+SLOT_VALUES_PRUNE_KEEP_DAYS = 90  # slot_values도 predictions/snapshots/model_trainings와
+                                   # 동일한 append-only 누적 패턴인데 유일하게 보관주기가
+                                   # 빠져 있었다 (analysis_team storage 리포트 2026-11-22_2018
+                                   # 발견점 #1, synthesizer Top3 #2). predictions와 동일하게
+                                   # 90일로 맞춘다 — 자세한 이유는
+                                   # storage.prune_slot_values() docstring 참고.
 STRATEGY_NAMES = list(ALL_STRATEGIES.keys()) + ["lstm_predictor"]
 RESET_DAYS = 7                # "리셋" 포트폴리오를 며칠마다 1000만원으로 초기화할지
 PORTFOLIO_MODES = ["reset", "cumulative"]
@@ -894,6 +900,11 @@ def main():
                     # 영향 없음 — 이미 7일 넘게 안 확정된 행만 지운다.
                     n_pruned_stale_unresolved = storage.prune_stale_unresolved_predictions(
                         conn, keep_days=STALE_UNRESOLVED_PREDICTIONS_KEEP_DAYS)
+                    # slot_values도 predictions/snapshots/model_trainings와 같은 유지보수
+                    # 시점에 함께 정리한다 (analysis_team storage 리포트 2026-11-22_2018
+                    # 발견점 #1, synthesizer Top3 #2). 매매 판단에는 전혀 쓰이지 않는
+                    # 순수 진단용 시계열이라 지워도 거래 로직에 영향 없음.
+                    n_pruned_slot_values = storage.prune_slot_values(conn, keep_days=SLOT_VALUES_PRUNE_KEEP_DAYS)
                     # WAL 파일도 함께 줄인다 — 다른 커넥션이 몰려 있으면 부분적으로만
                     # 체크포인트되고 예외 없이 끝나므로 트레이딩 사이클에 안전하다.
                     conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -904,12 +915,14 @@ def main():
                         "snapshots_rows_deleted": n_pruned_snapshots,
                         "model_trainings_rows_deleted": n_pruned_trainings,
                         "stale_unresolved_predictions_rows_deleted": n_pruned_stale_unresolved,
+                        "slot_values_rows_deleted": n_pruned_slot_values,
                     })
                 last_prune_date = today_str
                 log.info(f"predictions 보관주기 정리 완료: {n_pruned}건 삭제 (keep_days={PREDICTIONS_PRUNE_KEEP_DAYS}), "
                          f"snapshots {n_pruned_snapshots}건 삭제 (keep_days={SNAPSHOTS_PRUNE_KEEP_DAYS}), "
                          f"model_trainings {n_pruned_trainings}건 삭제 (keep_days={MODEL_TRAININGS_PRUNE_KEEP_DAYS}, trained=0만 대상), "
-                         f"미확정 고아 predictions {n_pruned_stale_unresolved}건 삭제 (keep_days={STALE_UNRESOLVED_PREDICTIONS_KEEP_DAYS})")
+                         f"미확정 고아 predictions {n_pruned_stale_unresolved}건 삭제 (keep_days={STALE_UNRESOLVED_PREDICTIONS_KEEP_DAYS}), "
+                         f"slot_values {n_pruned_slot_values}건 삭제 (keep_days={SLOT_VALUES_PRUNE_KEEP_DAYS})")
             except Exception as e:
                 log.exception(f"predictions/snapshots 보관주기 정리 중 에러 (다음 사이클에 재시도): {e}")
 

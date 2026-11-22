@@ -601,6 +601,27 @@ def prune_model_trainings(conn, keep_days: int = 365) -> int:
     return cur.rowcount if cur.rowcount is not None and cur.rowcount > 0 else 0
 
 
+def prune_slot_values(conn, keep_days: int = 90) -> int:
+    """slot_values도 predictions/snapshots/model_trainings와 동일한 append-only
+    누적 테이블(사이클마다 전략 x 코인 수만큼 insert)인데 유일하게 보관주기가
+    빠져 있었다(analysis_team storage 리포트 2026-11-22_2018 발견점 #1,
+    synthesizer Top3 #2). 이 테이블은 현재 dashboard.py/storage.py 어디서도
+    조회하지 않는 순수 진단용 시계열(add_slot_values() 참고)이라 90일을
+    지워도 매매 판단에는 영향이 없다. keep_days=90은 predictions(90일)와
+    맞춰, 추후 "슬롯 쏠림이 언제부터 심해졌는지" 사후 분석 화면이 생기기
+    전까지 활용 가능한 기간을 당장 무한 누적시키지 않으면서도 넉넉히 남겨둔
+    것이다 — 실제로 그런 분석 화면이 만들어지면 keep_days를 재검토해야
+    한다(해당 리포트의 트레이드오프 경고). timestamp는 add_slot_values()가
+    저장하는 그대로의 문자열이라, 다른 prune_* 함수와 동일하게 문자열
+    비교로도 시간 순서가 맞는다. 반환값: 삭제된 행 수."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).isoformat()
+    cur = conn.execute(
+        "DELETE FROM slot_values WHERE timestamp < ?",
+        (cutoff,),
+    )
+    return cur.rowcount if cur.rowcount is not None and cur.rowcount > 0 else 0
+
+
 def prediction_accuracy(conn, coin: str | None = None, limit: int = 500) -> dict:
     """확정된(resolved=1) 예측들의 적중률 요약. coin 생략하면 전체 코인 합산."""
     if coin:
