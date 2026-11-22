@@ -2510,5 +2510,21 @@
     "decision": "skipped",
     "reason": "베팅 비율(얼마만큼의 돈을 움직이는지)을 코인별로 차등화하는 매매 핵심 판단 변경(판단 기준 2번)이며, 리포트 스스로 '가중치 선정에 주관이 들어가 과최적화 위험'과 '반영 전 과거 1분봉 데이터로 백테스트하여 실제로 리스크가 고르게 분산되는지 확인하는 과정이 필요 — 이는 실제 운영 데이터를 봐야 검증 가능하며 코드 분석만으로는 효과를 단정할 수 없다'고 명시함. 반영하지 않음.",
     "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_2118",
+    "proposal": "data_fetcher.py fetch_all_minute_history() docstring을 실제 소요시간(최대 7~8분)에 맞게 현실화하고, 이번 호출에서 force_full(전체 재수집) 적용된 코인 수를 log.info로 로깅",
+    "role": "execution (synthesizer Top3 #1)",
+    "decision": "applied",
+    "reason": "순수 로깅/문서 수정으로 매매 로직을 전혀 건드리지 않아 리스크가 거의 없고, 향후 다른 개선의 효과를 측정할 진단 기반이 됨. force_full 코인 집계 로직을 파이썬으로 시뮬레이션해 0개/일부/전체 코인이 force_full인 각 경우 로그가 올바르게 생략/출력되는지 확인.",
+    "commit": null
+  },
+  {
+    "timestamp": "2026-11-22_2118",
+    "proposal": "main_loop.py run_one_cycle()이 '캔들 수집'(fetch_all_latest_candles) 구간 소요시간을 측정해 반환하고, main()의 평상시 사이클 지연 경고(CYCLE_ELAPSED_WARN_THRESHOLD_SEC)에 그 값을 덧붙여 수집 지연과 전략계산/DB쓰기 지연을 구분",
+    "role": "execution (synthesizer Top3 #1)",
+    "decision": "applied",
+    "reason": "run_one_cycle()의 유일한 호출부(main_loop.py의 main())만 수정하면 되고 다른 파일에서 이 함수를 import/호출하는 곳이 없음을 raw 소스 grep으로 확인 — 시그니처 변경(None -> float|None 반환)의 파급 범위가 이 파일 안으로 한정됨. 매매 로직은 그대로 두고 진단 가시성만 추가하는 변경이라 기존 동작을 깨뜨릴 위험이 낮음. 경고 메시지 포맷을 파이썬으로 직접 실행해 fetch_elapsed가 있을 때/None일 때 모두 올바르게 조립됨을 확인.",
+    "commit": null
   }
 ]

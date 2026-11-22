@@ -410,11 +410,21 @@ def time_until_next_cloud_analysis() -> timedelta:
     return target - now_utc
 
 
-def run_one_cycle(conn) -> None:
+def run_one_cycle(conn) -> float | None:
+    """반환값: 이번 사이클의 "캔들 수집"(Upbit API 호출, fetch_all_latest_candles)
+    구간에 걸린 시간(초). main()의 사이클 지연 경고(CYCLE_ELAPSED_WARN_THRESHOLD_SEC)가
+    사이클 전체 소요시간(_elapsed) 중 수집 구간이 차지한 비중을 같이 보여줄 수
+    있게 측정값을 그대로 돌려준다 — 지연 원인이 네트워크(수집) 쪽인지 전략계산/
+    DB쓰기 쪽인지 1차로 구분하기 위함 (analysis_team execution 리포트
+    2026-11-22_2118 발견점 #2, synthesizer Top3 #1). 캔들 수집 자체가 실패해
+    이번 사이클을 스킵하는 경로(아래 "if not candles")에서도 그때까지 걸린
+    시간은 유효한 값이라 그대로 반환한다."""
     global _warned_all_candles_fail
     now = datetime.now(timezone.utc).isoformat()
     set_progress("collecting", "최신 1분봉 수집 중...")
+    _fetch_started = time.monotonic()
     candles = data_fetcher.fetch_all_latest_candles(count=max(lstm_model.SEQ_LEN + 5, 200))
+    _fetch_elapsed = time.monotonic() - _fetch_started
     if not candles:
         now_mono = time.monotonic()
         if _warned_all_candles_fail is None or (now_mono - _warned_all_candles_fail) >= _ALL_CANDLES_FAIL_LOG_INTERVAL_SEC:
@@ -422,7 +432,7 @@ def run_one_cycle(conn) -> None:
                          f"{_ALL_CANDLES_FAIL_LOG_INTERVAL_SEC}초 내 반복 경고 생략)")
             _warned_all_candles_fail = now_mono
         set_progress("error", "캔들 수집 실패, 다음 사이클에 재시도")
-        return
+        return _fetch_elapsed
     _warned_all_candles_fail = None  # 복구됐으니 다음 전체 실패 시 즉시 다시 경고
 
     set_progress("cycle_running", "5개 전략 신호 계산/매매 중...")
@@ -639,6 +649,7 @@ def run_one_cycle(conn) -> None:
     # 동안 대시보드가 실제로는 대기 중인데도 "신호 계산/매매 중"으로 표시됐다
     # (analysis_team execution 리포트 2026-11-22_1518 발견점 #2).
     set_progress("idle", "대기 중")
+    return _fetch_elapsed
 
 
 def retrain_lstm() -> bool:
@@ -800,9 +811,14 @@ def main():
 
     while not _stop:
         _cycle_started = time.monotonic()  # 이번 사이클(수집+매매, 필요시 재학습) 소요시간 측정용
+        # run_one_cycle()이 측정해 돌려주는 "캔들 수집" 구간 소요시간(초). 예외가
+        # 나서 run_one_cycle()이 값을 반환하지 못하면 None으로 남아 아래 경고
+        # 로그에서 조용히 생략된다 (analysis_team execution 리포트 2026-11-22_2118
+        # 발견점 #2, synthesizer Top3 #1).
+        _fetch_elapsed_this_cycle: float | None = None
         try:
             with storage.connect() as conn:
-                run_one_cycle(conn)
+                _fetch_elapsed_this_cycle = run_one_cycle(conn)
         except Exception as e:
             # 코인/전략 단위 예외(위 440행 근처)와 lstm 재학습(아래 _warned_missing_model
             # 초기화 부근)은 모두 "반복되는 예외는 1시간에 1회만 전체 트레이스" 쓰로틀이
@@ -945,7 +961,13 @@ def main():
         # 피하기 위해 여기서는 제외한다.
         if (not _retrain_attempted_this_iteration and not _prune_attempted_this_iteration
                 and _elapsed > CYCLE_ELAPSED_WARN_THRESHOLD_SEC):
-            log.warning(f"사이클 처리에 {_elapsed:.1f}초 소요(60초 중) — "
+            # 사이클 전체 소요시간(_elapsed) 중 "캔들 수집" 구간이 차지한 비중을
+            # 같이 보여줘서, 지연 원인이 네트워크(수집) 쪽인지 전략계산/DB쓰기
+            # 쪽인지 로그만 보고 1차로 구분할 수 있게 한다 (analysis_team
+            # execution 리포트 2026-11-22_2118 발견점 #2, synthesizer Top3 #1).
+            _fetch_info = (f" (캔들 수집 {_fetch_elapsed_this_cycle:.1f}초 포함)"
+                           if _fetch_elapsed_this_cycle is not None else "")
+            log.warning(f"사이클 처리에 {_elapsed:.1f}초 소요(60초 중){_fetch_info} — "
                         f"{CYCLE_ELAPSED_WARN_THRESHOLD_SEC}초 임계치 초과, 60초 주기에 근접")
         _sleep_remaining = max(0.0, CYCLE_INTERVAL_SEC - _elapsed)
         _slept = 0.0

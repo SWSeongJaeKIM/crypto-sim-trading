@@ -461,15 +461,26 @@ def _save_last_full_refresh(marker: dict[str, str]) -> None:
 def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=None) -> dict[str, pd.DataFrame]:
     """6대 코인의 최근 N일 1분봉 전체 (LSTM 학습/재학습 시 호출). 디스크 캐시 지원.
 
-    6개 코인을 각자 별도 스레드에서 동시에 수집한다 (예전엔 순차로 하나씩
-    받아서 6배 느렸음 — 코인당 ~90초면 전체 ~9분이던 게, 병렬화하면 전체도
-    ~90초 선으로 줄어듦). 모든 코인 스레드가 전역 `_RateLimiter` 하나를
-    공유해서, 실제 Upbit에 가는 요청 간격이 "전체 기준" sleep_sec(기본
-    0.12초)로 유지된다 — 예전에는 각 스레드가 "자기 혼자" sleep_sec만
-    지켰기 때문에 6개 스레드가 각자 0.12초마다 쏘면 전체 초당 요청 수가
-    순차 실행 대비 최대 6배까지 늘어나는 문제가 있었다(주석은 "늘지 않는다"고
-    돼 있었지만 실제 동작은 그렇지 않았다). 공유 리미터로 이제는 스레드 수와
-    무관하게 전체 요청 속도가 순차 실행과 같게 유지된다.
+    6개 코인을 각자 별도 스레드에서 동시에 수집한다. 모든 코인 스레드가 전역
+    `_RateLimiter` 하나를 공유해서, 실제 Upbit에 가는 요청 간격이 "전체 기준"
+    sleep_sec(기본 0.12초)로 유지된다 — 예전에는 각 스레드가 "자기 혼자"
+    sleep_sec만 지켰기 때문에 6개 스레드가 각자 0.12초마다 쏘면 전체 초당
+    요청 수가 순차 실행 대비 최대 6배까지 늘어나는 문제가 있었다(주석은
+    "늘지 않는다"고 돼 있었지만 실제 동작은 그렇지 않았다). 공유 리미터로
+    이제는 스레드 수와 무관하게 전체 요청 속도가 순차 실행과 같게 유지된다.
+
+    주의(실제 소요 시간): 위 병렬화는 "Upbit에 가는 실제 요청 속도"를 줄이지
+    않는다(스레드 수와 무관하게 동일한 전역 리미터를 통과해야 하므로) — 코인별
+    날짜 경계가 달라 서로 대기 시간을 메워주는 효과만 있다. 그래서 평소(코인별로
+    캐시 증분 수집만 필요한 날)는 각 코인이 받을 페이지가 적어 빠르지만, 여러
+    코인의 날짜 경계가 겹쳐 같은 날 동시에 force_full(전체 재수집, 아래 참고)이
+    되면 공유 리미터로 인해 사실상 직렬화되어 코인당 최대 약 648페이지
+    (HISTORY_DAYS_FOR_TRAIN=90일 기준) × 6코인 × 0.12초 ≈ 7~8분까지 걸릴 수
+    있다. 이 함수를 동기 호출하는 main_loop.py의 retrain_lstm() 동안은 매매
+    사이클 전체가 멈추므로(이미 알려진 trade-off), 실제보다 낙관적인 소요
+    시간을 docstring에 남겨두면 평소보다 느려진 정상 상황을 장애로 오인하기
+    쉽다 (analysis_team execution 리포트 2026-11-22_2118 발견점 #1, synthesizer
+    Top3 #1).
 
     캐시 CSV가 있고 오늘 그 코인을 아직 전체 재수집하지 않았다면, 캐시의
     마지막 open_time 이후분만 받아서 병합한다(증분 수집, 위 모듈 docstring
@@ -494,6 +505,7 @@ def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=Non
     # 직렬화해 완전히 피한다.
     today_str = str(pd.Timestamp.now().date())
     last_full_refresh = _load_last_full_refresh()
+    _forced_full_coins: list[str] = []
 
     def _fetch_one(coin: str, i: int) -> tuple[str, pd.DataFrame | None, bool]:
         if on_progress:
@@ -622,9 +634,18 @@ def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=Non
                 result[coin] = df
                 if used_force_full:
                     last_full_refresh[coin] = today_str
+                    _forced_full_coins.append(coin)
 
     # 스레드 풀이 모두 끝난 뒤 한 번만 기록 (위 설명대로 경합 방지).
     _save_last_full_refresh(last_full_refresh)
+    if _forced_full_coins:
+        # 이번 호출에서 실제로 force_full(전체 재수집) 적용된 코인 수를 남긴다 —
+        # 위 docstring이 설명하는 "여러 코인이 동시에 force_full이면 최대 7~8분까지
+        # 걸릴 수 있다"는 상황이 실제로 발생했는지를 재학습이 오래 걸린 날 바로
+        # 확인할 수 있게 한다 (analysis_team execution 리포트 2026-11-22_2118
+        # 구체적 제안 #1, synthesizer Top3 #1).
+        log.info(f"이번 호출에서 force_full(전체 재수집) 적용된 코인: {_forced_full_coins} "
+                 f"({len(_forced_full_coins)}/{len(COINS)}개)")
 
     # dict 삽입 순서가 코인 순서와 안 맞을 수 있으니(완료되는 대로 들어옴),
     # 이후 코드가 COINS 순서를 가정하지 않도록 COINS 순서로 재정렬해서 반환.
