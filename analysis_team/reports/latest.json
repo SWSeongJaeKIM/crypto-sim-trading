@@ -1,47 +1,47 @@
 {
-  "generated_at": "2026-11-22_0118",
+  "generated_at": "2026-11-22_0221",
   "roles": {
     "execution": {
       "role": "execution",
       "role_label": "실행/버그 분석가",
-      "timestamp": "2026-11-22_0118",
-      "path": "analysis_team/reports/2026-11-22_0118_execution.md",
-      "summary": "예외처리·페이지네이션·사이클 드리프트 보정은 이전 리뷰들을 거치며 대체로 견고해졌으나, \"반복되는 실패 상황에서 로그가 폭주하지 않게 쓰로틀링하는\" 패턴이 main_loop.py의 전략/코인 신호 계산 쪽에는 이미 적용됐는데 data_fetcher.py의 네트워크 수집 실패 쪽에는 빠져"
+      "timestamp": "2026-11-22_0221",
+      "path": "analysis_team/reports/2026-11-22_0221_execution.md",
+      "summary": "예외처리·타이밍·페이지네이션 방어 로직은 이미 매우 꼼꼼하게 돼 있고(코인/전략별 격리, stuck 페이지 감지, 사이클 드리프트 보정 등), 남아있는 구체적 틈은 data_fetcher.py의 반복 실패 로그 쓰로틀링 부재(오늘자 분석팀 리포트에서 이미 식별됐으나 아직 미적용)와 ma"
     },
     "lstm": {
       "role": "lstm",
       "role_label": "LSTM 분석가",
-      "timestamp": "2026-11-22_0118",
-      "path": "analysis_team/reports/2026-11-22_0118_lstm.md",
-      "summary": "피처 구성·재학습 주기·학습 데이터 기간은 이전 리뷰에서 이미 개선되어 현재 상태로는 무리가 없고, 남은 핵심 이슈는 \"단일 코인 자기지표 피처의 구조적 한계\"와 \"finetune_chain_length가 기록만 되고 자동 정책에 쓰이지 않는다\"는 두 가지다."
+      "timestamp": "2026-11-22_0221",
+      "path": "analysis_team/reports/2026-11-22_0221_lstm.md",
+      "summary": "이번 재검토에서 지난 리포트(2026-11-22_0018)가 지적했던 \"finetune_chain_length 기록만 되고 조치 없음\" 문제는 커밋 `5651115`로 이미 올바르게 수정되었고, 남은 핵심 이슈는 여전히 \"FEATURE_COLS가 해당 코인 자기지표뿐\"이라는 점이다 — "
     },
     "risk": {
       "role": "risk",
       "role_label": "리스크 분석가",
-      "timestamp": "2026-11-22_0118",
-      "path": "analysis_team/reports/2026-11-22_0118_risk.md",
-      "summary": "TRADE_FRACTION은 \"50% 고정\"이 아니라 코인별 슬롯(전체 자금의 1/6) 현금에 대해 확신도로 10~90%를 움직이는 구조라 집중 리스크는 이미 상당히 완화되어 있고, 심각한 물타기 로직도 보이지 않는다. 다만 6코인 균등배분이 변동성 차이를 반영하지 않는 점과 성과지표가"
+      "timestamp": "2026-11-22_0221",
+      "path": "analysis_team/reports/2026-11-22_0221_risk.md",
+      "summary": "리스크 구조 자체(슬롯 분리, 손절선, 레버리지 안전장치, reset/cumulative 이원화)는 설계가 신중하고 이미 잘 돼 있다. 다만 ①코인별 변동성 차이를 전혀 반영하지 않는 균등 배분·균등 매매비율, ②평단가 기준 손절선이 추가 매수마다 뒤로 밀리는 구조는 구체적으로 보완할 "
     },
     "storage": {
       "role": "storage",
       "role_label": "데이터/저장소 분석가",
-      "timestamp": "2026-11-22_0118",
-      "path": "analysis_team/reports/2026-11-22_0118_storage.md",
-      "summary": "WAL/재시도/인덱스/retention(predictions·snapshots)은 이미 과거 리뷰를 거쳐 견고하게 정리되어 있고, 남은 공백은 `model_trainings` 테이블에 보관주기가 빠져 있는 점과 `portfolios` 합성키 설계가 helper로 완화되었을 뿐 근본적으로"
+      "timestamp": "2026-11-22_0221",
+      "path": "analysis_team/reports/2026-11-22_0221_storage.md",
+      "summary": "predictions/snapshots 보관주기, WAL+재시도 동시성, portfolios 키 조립/파싱 중복 등 과거에 반복 지적됐던 주요 이슈는 이미 코드에 반영돼 있고, 지금 시점에 새로 지적할 치명적 문제는 없다 — 남은 건 `model_trainings` prune 부재 정도"
     },
     "strategy": {
       "role": "strategy",
       "role_label": "전략 분석가",
-      "timestamp": "2026-11-22_0118",
-      "path": "analysis_team/reports/2026-11-22_0118_strategy.md",
-      "summary": "4개 조건식의 로직 자체는 각각 타당하지만, `ma_cross_rsi`의 RSI 필터가 급락 시 정작 필요한 매도 신호를 막을 수 있고, 거래량을 전혀 쓰지 않는다는 점, `ma_cross_rsi`와 `macd_momentum`이 구조적으로 겹친다는 점이 가장 눈에 띄는 개선 여지입니다"
+      "timestamp": "2026-11-22_0221",
+      "path": "analysis_team/reports/2026-11-22_0221_strategy.md",
+      "summary": "4개 조건식 각각의 내부 로직(크로스/밴드/히스토그램 판정)은 타당하지만, 파라미터는 일봉 기준 \"교과서 기본값\"을 그대로 쓰고 있고, 3/4 전략이 사실상 같은 이동평균 추세전환 신호를 변형한 것이라 상관관계가 높으며, 거래량을 전혀 쓰지 않아 저유동성/급등락 구간에서 오작동 여지가 "
     },
     "synthesizer": {
       "role": "synthesizer",
       "role_label": "종합 조정자",
-      "timestamp": "2026-11-22_0118",
-      "path": "analysis_team/reports/2026-11-22_0118_synthesizer.md",
-      "summary": "1. **model_trainings 테이블 prune 추가** (storage 제안) — predictions/snapshots는 이미 일일 정리 대상인데 model_trainings만 빠져 있음. main_loop.py의 기존 prune 블록에 `prune_model_training"
+      "timestamp": "2026-11-22_0221",
+      "path": "analysis_team/reports/2026-11-22_0221_synthesizer.md",
+      "summary": "1. **storage: model_trainings 테이블에 prune 로직 추가** (keep_days=365, trained=0만 대상) — 함수 하나 추가 + 기존 일일 prune 블록에 호출 추가만 하면 되는 가장 단순한 구현. 성공 기록(trained=1)은 보존해 모델 성능"
     }
   }
 }
