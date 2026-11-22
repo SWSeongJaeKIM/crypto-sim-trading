@@ -81,9 +81,22 @@ class CoinSlot:
     coin: str
     cash_krw: float          # 이 코인에 배정된 현금(매수 대기 자금 + 숏 마진 포함)
     qty: float = 0.0         # 보유 코인 수량 (롱)
-    avg_cost_krw: float = 0.0  # 평균 매수가(KRW, 롱)
+    avg_cost_krw: float = 0.0  # 평균 매수가(KRW, 롱) — 손절 기준에는 더 이상 쓰지 않음(아래 참고)
+    # 롱 포지션의 "최초" 진입가(KRW). avg_cost_krw는 추가매수마다 가중평균으로
+    # 다시 계산되는데, 하락 중 신호가 계속 BUY를 내면 평단가가 가격과 함께
+    # 내려가면서 "진입가 대비 STOP_LOSS_PCT 하락" 손절선이 사실상 뒤로 밀리는
+    # 물타기형 리스크가 있었다(analysis_team risk 리포트 2026-11-22_0417 발견점
+    # #1, synthesizer Top3 #1). 포지션을 처음 열 때의 가격을 별도로 고정해두고
+    # 손절 판단은 이 값을 기준으로 한다 — 평단가는 대시보드 표시 등 기존 용도에
+    # 계속 쓰인다. 포지션이 0으로 완전히 청산되면 다음 재진입을 위해 0으로
+    # 리셋한다(새 "최초" 진입이 되므로).
+    first_entry_price_krw: float = 0.0
     short_qty: float = 0.0        # 숏 포지션 수량 (코인 단위, 항상 0 이상)
-    short_avg_entry_krw: float = 0.0  # 숏 평균 진입가(KRW)
+    short_avg_entry_krw: float = 0.0  # 숏 평균 진입가(KRW) — 손절 기준에는 더 이상 쓰지 않음
+    # 숏 포지션의 "최초" 진입가(KRW). 롱의 first_entry_price_krw와 동일한 이유로,
+    # 숏도 추가 진입마다 평균 진입가가 갱신되면 같은 물타기형 리스크가 대칭적으로
+    # 생긴다(가격이 계속 올라도 평균 진입가가 같이 올라가 손절선이 뒤로 밀림).
+    short_first_entry_price_krw: float = 0.0
     short_margin_krw: float = 0.0     # 숏에 걸어둔 마진(현금에서 분리해 보관 중인 금액)
 
 
@@ -117,6 +130,11 @@ class Portfolio:
             return False
         fee = spend * FEE_RATE
         qty = spend / price_krw
+        if slot.qty <= 0:
+            # 새로 여는(또는 완전히 비어 있던) 포지션의 "최초" 진입가를 고정.
+            # 이후 추가매수로 avg_cost_krw가 바뀌어도 이 값은 포지션이 완전히
+            # 청산되기 전까지 유지된다.
+            slot.first_entry_price_krw = price_krw
         new_qty = slot.qty + qty
         # 평균단가 갱신 (수수료는 손절 기준선에는 영향 주지 않도록 cost basis에는 포함하지 않음)
         slot.avg_cost_krw = (
@@ -148,6 +166,7 @@ class Portfolio:
         if slot.qty <= 1e-12:
             slot.qty = 0.0
             slot.avg_cost_krw = 0.0
+            slot.first_entry_price_krw = 0.0
         self.new_trades.append(Trade(
             timestamp=datetime.now(timezone.utc).isoformat(),
             coin=coin, side="SELL", price_krw=price_krw, qty=qty_to_sell,
@@ -170,6 +189,10 @@ class Portfolio:
         notional = margin * LEVERAGE
         fee = notional * FEE_RATE  # 선물 수수료는 마진이 아니라 포지션 전체(notional) 기준
         qty = notional / price_krw
+        if slot.short_qty <= 0:
+            # 롱의 first_entry_price_krw와 동일한 이유로 숏의 "최초" 진입가도
+            # 고정한다 (아래 short_first_entry_price_krw 참고).
+            slot.short_first_entry_price_krw = price_krw
         new_qty = slot.short_qty + qty
         # 평균 진입가 갱신 (추가 진입 시 가중평균)
         slot.short_avg_entry_krw = (
@@ -216,6 +239,7 @@ class Portfolio:
             slot.short_qty = 0.0
             slot.short_avg_entry_krw = 0.0
             slot.short_margin_krw = 0.0
+            slot.short_first_entry_price_krw = 0.0
         self.new_trades.append(Trade(
             timestamp=datetime.now(timezone.utc).isoformat(),
             coin=coin, side=side_label, price_krw=price_krw, qty=qty_to_close,
@@ -254,15 +278,28 @@ class Portfolio:
         None을 반환한다 (대시보드/로그용)."""
         slot = self.slots[coin]
 
-        if slot.qty > 0 and slot.avg_cost_krw > 0:
-            loss_pct = (slot.avg_cost_krw - price_krw) / slot.avg_cost_krw
-            if loss_pct >= STOP_LOSS_PCT:
-                self.sell(coin, price_krw, pct_of_qty=1.0,
-                          reason=f"손절 (진입가 대비 {loss_pct*100:.1f}% 하락)")
-                return f"롱 손절: {coin} 진입가 대비 {loss_pct*100:.1f}% 하락"
+        if slot.qty > 0:
+            # first_entry_price_krw(최초 진입가)를 기준으로 판단한다. 기존
+            # DB에 저장된 포지션(이 필드 추가 전에 이미 열려 있던 포지션)은
+            # 0.0으로 로드되므로, 그 경우에만 이전 동작(avg_cost_krw 기준)으로
+            # 폴백한다 — 다음 번 완전 청산 후 재진입부터는 first_entry_price_krw가
+            # 채워져 제대로 적용된다.
+            entry_price = slot.first_entry_price_krw if slot.first_entry_price_krw > 0 else slot.avg_cost_krw
+            if entry_price > 0:
+                loss_pct = (entry_price - price_krw) / entry_price
+                if loss_pct >= STOP_LOSS_PCT:
+                    self.sell(coin, price_krw, pct_of_qty=1.0,
+                              reason=f"손절 (진입가 대비 {loss_pct*100:.1f}% 하락)")
+                    return f"롱 손절: {coin} 진입가 대비 {loss_pct*100:.1f}% 하락"
 
-        if slot.short_qty > 0 and slot.short_avg_entry_krw > 0:
-            loss_pct = (price_krw - slot.short_avg_entry_krw) / slot.short_avg_entry_krw
+        if slot.short_qty > 0:
+            entry_price = (
+                slot.short_first_entry_price_krw if slot.short_first_entry_price_krw > 0
+                else slot.short_avg_entry_krw
+            )
+            if entry_price <= 0:
+                return None
+            loss_pct = (price_krw - entry_price) / entry_price
             if loss_pct >= LIQUIDATION_PCT:
                 # 안전망: 마진 전액 손실 지점. 손절(STOP_LOSS_PCT)이 항상 더
                 # 먼저 걸려야 하므로 정상 상황에서는 이 분기가 아니라 바로
