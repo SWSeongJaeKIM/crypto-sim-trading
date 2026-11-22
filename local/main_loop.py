@@ -667,7 +667,26 @@ def main():
             with storage.connect() as conn:
                 run_one_cycle(conn)
         except Exception as e:
-            log.exception(f"사이클 실행 중 에러 (스킵하고 계속): {e}")
+            # 코인/전략 단위 예외(위 440행 근처)와 lstm 재학습(아래 _warned_missing_model
+            # 초기화 부근)은 모두 "반복되는 예외는 1시간에 1회만 전체 트레이스" 쓰로틀이
+            # 있는데, 이 사이클 최상위 except만 빠져 있었다. storage.connect() 자체가
+            # 디스크 오류 등으로 계속 실패하는 가장 심각한 상황에서는 60초마다(하루 최대
+            # 1440회) 전체 스택트레이스가 무한정 쌓일 수 있었다 — 이 파일 전체가 피하려
+            # 한 로그 폭주가 가장 치명적인 장애 경로에서만 빠져 있던 역설 (analysis_team
+            # execution 리포트 2026-11-22_0517 발견점 #2, synthesizer Top3 #2). 기존
+            # _warned_repeated_exception 딕셔너리를 그대로 재사용하되, 사이클 전체는
+            # 특정 (전략, 코인)에 묶이지 않으므로 키의 앞 두 자리를 "_cycle" 고정값으로
+            # 채워 451행 패턴과 동일한 모양을 유지한다.
+            repeat_key = ("_cycle", "_cycle", type(e).__name__)
+            last_logged = _warned_repeated_exception.get(repeat_key)
+            now_mono = time.monotonic()
+            if last_logged is None or (now_mono - last_logged) >= _REPEATED_EXCEPTION_LOG_INTERVAL_SEC:
+                log.exception(f"사이클 실행 중 에러 (스킵하고 계속): {e}")
+                _warned_repeated_exception[repeat_key] = now_mono
+            else:
+                log.warning(f"사이클 실행 중 에러 반복 중 (같은 종류 "
+                             f"{_REPEATED_EXCEPTION_LOG_INTERVAL_SEC}초 내 전체 트레이스는 "
+                             f"이미 남겼음, 스킵하고 계속): {type(e).__name__}: {e}")
 
         now_local = datetime.now()
         # _elapsed(아래 650행 근처) 경고 로그가 재학습 때문에 느려진 사이클까지
