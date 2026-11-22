@@ -461,6 +461,29 @@ def prune_predictions(conn, keep_days: int = 90) -> int:
     return cur.rowcount if cur.rowcount is not None and cur.rowcount > 0 else 0
 
 
+def prune_stale_unresolved_predictions(conn, keep_days: int = 7) -> int:
+    """resolve_predictions()는 current_prices_krw에 해당 코인이 없으면 그냥
+    continue하므로(420~444행 근처), 코인이 거래 유니버스에서 빠지거나 가격
+    피드가 영구적으로 끊기면 그 코인의 예측 행들은 resolved=0으로 영원히
+    남는다. prune_predictions()는 resolved=1인 행만 지우므로 이런 "고아
+    미확정" 행은 보관주기 적용 대상에서 완전히 빠져 DB가 서서히 무한정
+    커질 수 있다 (analysis_team 리포트 2026-11-22_1124_storage.md, synthesizer
+    Top3 #2). 정상 케이스는 1사이클(1분) 안에 확정되므로, keep_days일
+    (기본 7일)보다 오래 미확정 상태인 행은 확정 불가능한 고아 행으로 보고
+    지운다. resolved=1인 행과 섞이지 않도록 resolved=0만 대상으로 하며,
+    predicted_at은 ISO8601 UTC 문자열이라 문자열 비교로도 시간 순서가
+    맞는다(prune_predictions와 동일한 방식). keep_days를 짧게 잡으면 가격
+    피드가 며칠씩 끊겼다가 복구되는 정상 케이스의 미확정 행까지 지워질 수
+    있어, 기본값은 평소 확정 소요시간(1분) 대비 넉넉한 7일로 둔다.
+    반환값: 삭제된 행 수."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).isoformat()
+    cur = conn.execute(
+        "DELETE FROM predictions WHERE resolved = 0 AND predicted_at < ?",
+        (cutoff,),
+    )
+    return cur.rowcount if cur.rowcount is not None and cur.rowcount > 0 else 0
+
+
 def prune_snapshots(conn, keep_days: int = 365) -> int:
     """snapshots도 predictions와 동일하게 append-only로 사이클마다(1분 간격)
     전략 x 모드(reset/cumulative)별로 1행씩 영구 누적되는데, predictions만

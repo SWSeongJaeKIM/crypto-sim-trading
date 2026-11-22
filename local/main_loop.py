@@ -60,6 +60,13 @@ MODEL_TRAININGS_PRUNE_KEEP_DAYS = 365  # model_trainings도 동일한 append-onl
                                    # 학습 기록(trained=1)은 모델 성능 추이 보존을 위해 절대
                                    # 지우지 않고, 실패 기록(trained=0)만 대상으로 한다 — 자세한
                                    # 이유는 storage.prune_model_trainings() docstring 참고.
+STALE_UNRESOLVED_PREDICTIONS_KEEP_DAYS = 7  # predictions 중 resolved=0(미확정) 상태로
+                                   # keep_days일 넘게 남아있는 "고아" 행을 정리한다
+                                   # (analysis_team 리포트 2026-11-22_1124_storage.md,
+                                   # synthesizer Top3 #2). PREDICTIONS_PRUNE_KEEP_DAYS(90일,
+                                   # resolved=1 대상)와는 별개 — 정상 케이스는 1사이클(1분)
+                                   # 안에 확정되므로 7일이면 충분히 넉넉하다. 자세한 이유는
+                                   # storage.prune_stale_unresolved_predictions() docstring 참고.
 STRATEGY_NAMES = list(ALL_STRATEGIES.keys()) + ["lstm_predictor"]
 RESET_DAYS = 7                # "리셋" 포트폴리오를 며칠마다 1000만원으로 초기화할지
 PORTFOLIO_MODES = ["reset", "cumulative"]
@@ -790,6 +797,14 @@ def main():
                     # synthesizer Top3 #1). trained=0(실패 기록)만 대상이라 모델
                     # 성능 추이(trained=1)는 전혀 영향받지 않는다.
                     n_pruned_trainings = storage.prune_model_trainings(conn, keep_days=MODEL_TRAININGS_PRUNE_KEEP_DAYS)
+                    # predictions 중 resolved=0(미확정) 상태로 코인이 거래 유니버스에서
+                    # 빠지거나 가격 피드가 영구 중단돼 영원히 안 확정되는 "고아" 행도
+                    # 같은 유지보수 시점에 함께 정리한다 (analysis_team 리포트
+                    # 2026-11-22_1124_storage.md, synthesizer Top3 #2). resolve_predictions()의
+                    # 정상 확정 로직(위 prune_predictions와 달리 resolved=0만 대상)에는
+                    # 영향 없음 — 이미 7일 넘게 안 확정된 행만 지운다.
+                    n_pruned_stale_unresolved = storage.prune_stale_unresolved_predictions(
+                        conn, keep_days=STALE_UNRESOLVED_PREDICTIONS_KEEP_DAYS)
                     # WAL 파일도 함께 줄인다 — 다른 커넥션이 몰려 있으면 부분적으로만
                     # 체크포인트되고 예외 없이 끝나므로 트레이딩 사이클에 안전하다.
                     conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -799,11 +814,13 @@ def main():
                         "rows_deleted": n_pruned,
                         "snapshots_rows_deleted": n_pruned_snapshots,
                         "model_trainings_rows_deleted": n_pruned_trainings,
+                        "stale_unresolved_predictions_rows_deleted": n_pruned_stale_unresolved,
                     })
                 last_prune_date = today_str
                 log.info(f"predictions 보관주기 정리 완료: {n_pruned}건 삭제 (keep_days={PREDICTIONS_PRUNE_KEEP_DAYS}), "
                          f"snapshots {n_pruned_snapshots}건 삭제 (keep_days={SNAPSHOTS_PRUNE_KEEP_DAYS}), "
-                         f"model_trainings {n_pruned_trainings}건 삭제 (keep_days={MODEL_TRAININGS_PRUNE_KEEP_DAYS}, trained=0만 대상)")
+                         f"model_trainings {n_pruned_trainings}건 삭제 (keep_days={MODEL_TRAININGS_PRUNE_KEEP_DAYS}, trained=0만 대상), "
+                         f"미확정 고아 predictions {n_pruned_stale_unresolved}건 삭제 (keep_days={STALE_UNRESOLVED_PREDICTIONS_KEEP_DAYS})")
             except Exception as e:
                 log.exception(f"predictions/snapshots 보관주기 정리 중 에러 (다음 사이클에 재시도): {e}")
 
