@@ -1,47 +1,47 @@
 {
-  "generated_at": "2026-11-22_0318",
+  "generated_at": "2026-11-22_0417",
   "roles": {
     "execution": {
       "role": "execution",
       "role_label": "실행/버그 분석가",
-      "timestamp": "2026-11-22_0318",
-      "path": "analysis_team/reports/2026-11-22_0318_execution.md",
-      "summary": "전반적인 예외처리·로깅 설계는 이미 성숙한 수준(전략/코인별 격리, 반복 로그 억제, 부분 데이터 폴백, 사이클 드리프트 보정)이며, 남은 개선점은 네트워크 타임아웃 예산과 일일 유지보수 작업이 사이클 타이밍 경고와 상호작용하는 지점 두 곳 정도다."
+      "timestamp": "2026-11-22_0417",
+      "path": "analysis_team/reports/2026-11-22_0417_execution.md",
+      "summary": "예외처리/로깅/사이클 지연 보정은 이미 상당히 꼼꼼하게 설계돼 있고 억지로 손댈 필요는 없어 보임. 다만 LSTM 재학습이 매번 90일치를 캐시 재사용 없이 전부 재수집하는 구조적 비효율과, 특정 코인 데이터 누락 시 손절체크까지 조용히 스킵되는 점은 실질적인 개선 여지가 있다."
     },
     "lstm": {
       "role": "lstm",
       "role_label": "LSTM 분석가",
-      "timestamp": "2026-11-22_0318",
-      "path": "analysis_team/reports/2026-11-22_0318_lstm.md",
-      "summary": "피처/모델 구조는 데이터 특성(낮은 신호 대 잡음비)에 맞게 보수적으로 설계되어 있고 롤백 안전장치도 갖췄으나, \"영구 파인튠 체인\"의 자동 리셋 정책 부재와 코인 자신 외 외부 피처 부재가 남은 공백이다."
+      "timestamp": "2026-11-22_0417",
+      "path": "analysis_team/reports/2026-11-22_0417_lstm.md",
+      "summary": "피처·학습 로직 상당 부분은 이미 근거 있게 설계되어 있고(검증 셋 겹침 제거, 롤백 안전장치, val_acc 기반 임계값 조정 등), 가장 실질적인 개선 지점은 \"영구 파인튠 체인에 자동 리셋 트리거가 없다\"는 점과 \"피처가 가격/거래량 파생 지표로만 한정되어 있다\"는 점이다."
     },
     "risk": {
       "role": "risk",
       "role_label": "리스크 분석가",
-      "timestamp": "2026-11-22_0318",
-      "path": "analysis_team/reports/2026-11-22_0318_risk.md",
-      "summary": "손절선이 매수 시마다 재계산되는 평균단가를 기준으로 하기 때문에, 하락 중 추가매수(물타기)가 손절 트리거를 뒤로 미루는 구조적 위험이 가장 우선적으로 손봐야 할 지점이고, 나머지(배분·리셋구조)는 큰 결함 없이 설계 의도에 맞게 돌아가고 있다."
+      "timestamp": "2026-11-22_0417",
+      "path": "analysis_team/reports/2026-11-22_0417_risk.md",
+      "summary": "TRADE_FRACTION의 실체(고정 50%가 아니라 신뢰도 기반 10~90%)와 평단가 재계산 방식이 맞물려 \"손절선이 손실과 함께 밀려나는\" 물타기형 위험이 로직상 존재하며, 나머지(균등배분·리셋구조)는 설계 의도에 크게 부합한다."
     },
     "storage": {
       "role": "storage",
       "role_label": "데이터/저장소 분석가",
-      "timestamp": "2026-11-22_0318",
-      "path": "analysis_team/reports/2026-11-22_0318_storage.md",
-      "summary": "스키마/동시성/보관주기는 이전 analysis_team 리포트들을 거치며 대부분 잘 다듬어졌고, 남은 핵심 이슈는 portfolios 합성키의 근본적 설계 한계와 prune 함수들이 \"정의만 되어 있고 실제 호출 주체는 이 파일 밖\"이라는 점이다."
+      "timestamp": "2026-11-22_0417",
+      "path": "analysis_team/reports/2026-11-22_0417_storage.md",
+      "summary": "WAL 모드 + 재시도 로직 + 보관주기(prune) 설계는 이미 충실하게 반영되어 있고, 남은 이슈는 `prediction_accuracy_by_coin()`의 윈도우 함수 쿼리에 맞는 인덱스 부재와 `portfolios` 합성키 설계의 근본적 한계 정도다."
     },
     "strategy": {
       "role": "strategy",
       "role_label": "전략 분석가",
-      "timestamp": "2026-11-22_0318",
-      "path": "analysis_team/reports/2026-11-22_0318_strategy.md",
-      "summary": "4개 조건식 모두 지표 기간을 일봉/장기 차트용 표준값 그대로 쓰고 있고, ma_cross_rsi와 macd_momentum은 사실상 같은 신호를 내며, bollinger_rsi는 급락장에서 떨어지는 칼날을 반복 매수할 위험이 있다."
+      "timestamp": "2026-11-22_0417",
+      "path": "analysis_team/reports/2026-11-22_0417_strategy.md",
+      "summary": "4개 조건식 모두 구조 자체는 타당하지만, 기본 파라미터가 일봉/스윙 트레이딩 관례값을 거의 그대로 가져왔고, 거래량을 전혀 쓰지 않으며, `ma_cross_rsi`와 `macd_momentum`은 상관관계가 높아 사실상 유사 신호를 낼 가능성이 크다."
     },
     "synthesizer": {
       "role": "synthesizer",
       "role_label": "종합 조정자",
-      "timestamp": "2026-11-22_0318",
-      "path": "analysis_team/reports/2026-11-22_0318_synthesizer.md",
-      "summary": "**1. 네트워크 타임아웃 축소 (execution, data_fetcher.py 141~147행)**"
+      "timestamp": "2026-11-22_0417",
+      "path": "analysis_team/reports/2026-11-22_0417_synthesizer.md",
+      "summary": "1. **손절 기준선이 물타기와 함께 밀려나는 문제 수정** (risk) — `portfolio.py`의 `check_stop_loss_and_liquidation()`이 매수마다 재계산되는 평단가를 기준으로 손절을 판단해, 하락 중 추가매수 시 손절선이 계속 뒤로 밀리는 구조적 리스크"
     }
   }
 }
