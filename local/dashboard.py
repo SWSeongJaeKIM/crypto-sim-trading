@@ -199,7 +199,22 @@ PAGE = """
     <h3>📈 누적 포트폴리오 <span style="color:#9aa0a6;font-weight:400;font-size:12px;">(시작부터 지금까지 쭉 — 장기 성과용)</span></h3>
     <div class="cards" id="cards-cumulative"></div>
 
-    <h3>최근 거래 20건</h3>
+    <h3>거래 내역 <span id="trades-count" style="color:#9aa0a6;font-weight:400;font-size:12px;"></span></h3>
+    <div style="display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-bottom:10px;">
+      <label style="font-size:12px; color:#9aa0a6;">전략 <select id="filter-strategy" onchange="renderTrades()" style="background:#1a1d24; color:#e6e6e6; border:1px solid #2a2d35; border-radius:6px; padding:4px 8px; font-size:12px;"><option value="">전체</option></select></label>
+      <label style="font-size:12px; color:#9aa0a6;">구분 <select id="filter-mode" onchange="renderTrades()" style="background:#1a1d24; color:#e6e6e6; border:1px solid #2a2d35; border-radius:6px; padding:4px 8px; font-size:12px;"><option value="">전체</option><option value="reset">리셋</option><option value="cumulative">누적</option></select></label>
+      <label style="font-size:12px; color:#9aa0a6;">코인 <select id="filter-coin" onchange="renderTrades()" style="background:#1a1d24; color:#e6e6e6; border:1px solid #2a2d35; border-radius:6px; padding:4px 8px; font-size:12px;"><option value="">전체</option></select></label>
+      <label style="font-size:12px; color:#9aa0a6;">매수/매도 <select id="filter-side" onchange="renderTrades()" style="background:#1a1d24; color:#e6e6e6; border:1px solid #2a2d35; border-radius:6px; padding:4px 8px; font-size:12px;">
+        <option value="">전체</option>
+        <option value="BUY">매수</option>
+        <option value="SELL">매도</option>
+        <option value="SHORT_OPEN">숏 진입</option>
+        <option value="SHORT_CLOSE">숏 청산</option>
+        <option value="LONG_LIQUIDATED">롱 강제청산</option>
+        <option value="SHORT_LIQUIDATED">숏 강제청산</option>
+      </select></label>
+      <button onclick="resetTradeFilters()" style="background:#1a1d24; color:#9aa0a6; border:1px solid #2a2d35; border-radius:6px; padding:4px 10px; font-size:12px; cursor:pointer;">필터 초기화</button>
+    </div>
     <table id="trades"><thead><tr><th>시각</th><th>전략</th><th>구분</th><th>코인</th><th>매수/매도</th><th>수량</th><th>가격(KRW)</th><th>확신도/베팅비율</th></tr></thead><tbody></tbody></table>
 
     <h3>LSTM 실전 예측 적중률 (실제 가격으로 확정된 예측 기준)</h3>
@@ -230,6 +245,71 @@ function showTab(name) {
   document.getElementById('tab-btn-trading').classList.toggle('active', name === 'trading');
   document.getElementById('tab-btn-analysis').classList.toggle('active', name === 'analysis');
   if (name === 'analysis') loadAnalysis();
+}
+
+let lastTradesData = null;  // 마지막으로 받은 d.trades — 필터 select를 바꿀 때 재요청 없이 다시 그리는 데 사용
+
+function resetTradeFilters() {
+  document.getElementById('filter-strategy').value = '';
+  document.getElementById('filter-mode').value = '';
+  document.getElementById('filter-coin').value = '';
+  document.getElementById('filter-side').value = '';
+  renderTrades();
+}
+
+function renderTrades() {
+  if (!lastTradesData) return;
+  const fStrategy = document.getElementById('filter-strategy').value;
+  const fMode = document.getElementById('filter-mode').value;
+  const fCoin = document.getElementById('filter-coin').value;
+  const fSide = document.getElementById('filter-side').value;
+
+  // select 옵션(전략/코인)은 매번 받아온 데이터 기준으로 다시 채운다 — 선택값은 유지.
+  function fillOptions(selectId, values) {
+    const sel = document.getElementById(selectId);
+    const current = sel.value;
+    const opts = ['<option value="">전체</option>']
+      .concat(values.map(v => `<option value="${v}">${v}</option>`));
+    sel.innerHTML = opts.join('');
+    if (values.includes(current)) sel.value = current;
+  }
+  fillOptions('filter-strategy', [...new Set(lastTradesData.map(t => t.strategy))].sort());
+  fillOptions('filter-coin', [...new Set(lastTradesData.map(t => t.coin))].sort());
+
+  const filtered = lastTradesData.filter(t =>
+    (!fStrategy || t.strategy === fStrategy) &&
+    (!fMode || t.mode === fMode) &&
+    (!fCoin || t.coin === fCoin) &&
+    (!fSide || t.side === fSide)
+  );
+
+  document.getElementById('trades-count').innerText =
+    `(최근 ${lastTradesData.length}건 중 ${filtered.length}건 표시)`;
+
+  const tbody = document.querySelector('#trades tbody');
+  tbody.innerHTML = '';
+  for (const t of filtered) {
+    const modeLabel = t.mode === 'reset' ? '리셋' : '누적';
+    // reason에 "확신도 0.64 -> 65%" 형태로 박혀있는 부분만 추출해서 별도 칸에 표시
+    const m = (t.reason || '').match(/확신도\\s*([\\d.]+)\\s*->\\s*(\\d+)%/);
+    const confCell = m ? `${(parseFloat(m[1])*100).toFixed(0)}% → ${m[2]}%` : '-';
+    const sideMeta = {
+      BUY: ['buy', '매수'],
+      SELL: ['sell', '매도'],
+      SHORT_OPEN: ['short-open', '숏 진입'],
+      SHORT_CLOSE: ['short-close', '숏 청산'],
+      LONG_LIQUIDATED: ['liquidated', '롱 강제청산'],
+      SHORT_LIQUIDATED: ['liquidated', '숏 강제청산'],
+    };
+    const [sideClass, sideLabel] = sideMeta[t.side] || ['sell', t.side];
+    tbody.innerHTML += `<tr>
+      <td>${t.timestamp.slice(0,19).replace('T',' ')}</td>
+      <td>${t.strategy}</td><td>${modeLabel}</td><td>${t.coin}</td>
+      <td class="${sideClass}">${sideLabel}</td>
+      <td>${t.qty.toFixed(4)}</td><td>${Math.round(t.price_krw).toLocaleString()}</td>
+      <td style="color:var(--text-secondary, #9aa0a6);font-size:12px;">${confCell}</td>
+    </tr>`;
+  }
 }
 
 const ROLE_ORDER = ['strategy', 'lstm', 'execution', 'storage', 'risk', 'synthesizer'];
@@ -434,33 +514,8 @@ async function load() {
   renderCards('cards-reset', 'reset');
   renderCards('cards-cumulative', 'cumulative');
 
-  const tbody = document.querySelector('#trades tbody');
-  tbody.innerHTML = '';
-  for (const t of d.trades) {
-    const modeLabel = t.mode === 'reset' ? '리셋' : '누적';
-    // reason에 "확신도 0.64 -> 65%" 형태로 박혀있는 부분만 추출해서 별도 칸에 표시
-    const m = (t.reason || '').match(/확신도\\s*([\\d.]+)\\s*->\\s*(\\d+)%/);
-    const confCell = m ? `${(parseFloat(m[1])*100).toFixed(0)}% → ${m[2]}%` : '-';
-    // side별 색상/한글 라벨: BUY(롱 매수)=초록, SELL(롱 매도)=빨강,
-    // SHORT_OPEN(숏 진입)=주황, SHORT_CLOSE(숏 청산)=파랑,
-    // *_LIQUIDATED(강제청산/손절)=굵은 빨강으로 눈에 띄게 구분.
-    const sideMeta = {
-      BUY: ['buy', '매수'],
-      SELL: ['sell', '매도'],
-      SHORT_OPEN: ['short-open', '숏 진입'],
-      SHORT_CLOSE: ['short-close', '숏 청산'],
-      LONG_LIQUIDATED: ['liquidated', '롱 강제청산'],
-      SHORT_LIQUIDATED: ['liquidated', '숏 강제청산'],
-    };
-    const [sideClass, sideLabel] = sideMeta[t.side] || ['sell', t.side];
-    tbody.innerHTML += `<tr>
-      <td>${t.timestamp.slice(0,19).replace('T',' ')}</td>
-      <td>${t.strategy}</td><td>${modeLabel}</td><td>${t.coin}</td>
-      <td class="${sideClass}">${sideLabel}</td>
-      <td>${t.qty.toFixed(4)}</td><td>${Math.round(t.price_krw).toLocaleString()}</td>
-      <td style="color:var(--text-secondary, #9aa0a6);font-size:12px;">${confCell}</td>
-    </tr>`;
-  }
+  lastTradesData = d.trades;
+  renderTrades();
 
   // d.trainings는 코인별로 시간순(과거->최신) 묶음 — 먼저 추이(▲▼)를 계산한 뒤
   // 화면엔 최신이 위로 오도록 뒤집어서 보여준다.
@@ -563,7 +618,7 @@ def api_data():
                 "created_at": doc.get("created_at"),
             })
 
-        trades = storage.recent_trades(conn, limit=20)
+        trades = storage.recent_trades(conn, limit=200)
         for t in trades:
             # storage.parse_portfolio_key()가 유효하지 않은 키는 (원래 문자열,
             # "cumulative")로 폴백하므로, strategy를 그대로 덮어써도 기존
