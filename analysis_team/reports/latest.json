@@ -1,47 +1,47 @@
 {
-  "generated_at": "2026-11-22_1723",
+  "generated_at": "2026-11-22_1818",
   "roles": {
     "execution": {
       "role": "execution",
       "role_label": "실행/버그 분석가",
-      "timestamp": "2026-11-22_1723",
-      "path": "analysis_team/reports/2026-11-22_1723_execution.md",
-      "summary": "예외처리·로깅·Upbit 호출 패턴은 이미 수십 차례의 분석을 거쳐 매우 견고한 상태이고, 재학습 중 매매 사이클이 멈추는 구조적 문제는 여러 차례 검토 후 동시성 위험(모델 파일 비원자적 쓰기) 때문에 의도적으로 보류된 상태다. 이번 리뷰에서 실제로 코드를 직접 확인해 아직 반영되지 "
+      "timestamp": "2026-11-22_1818",
+      "path": "analysis_team/reports/2026-11-22_1818_execution.md",
+      "summary": "직전 회차에서 지적된 3건(on_progress 예외처리, 전체 캔들 실패 쓰로틀, COINS 중복)은 모두 코드에 반영되어 해결됨을 확인했고, 예외처리·API 재시도·사이클 타이밍 로직 전반은 견고하다. 다만 \"최신 1분봉\"의 데이터 신선도(staleness)를 검증하지 않는 새로운 "
     },
     "lstm": {
       "role": "lstm",
       "role_label": "LSTM 분석가",
-      "timestamp": "2026-11-22_1723",
-      "path": "analysis_team/reports/2026-11-22_1723_lstm.md",
-      "summary": "FEATURE_COLS가 조건식(strategies.py)과 동일 지표만 재사용해 LSTM만의 차별화된 정보가 부족하고, 모델 구조/학습 주기/롤백 안전장치는 이미 적절히 설계되어 있다."
+      "timestamp": "2026-11-22_1818",
+      "path": "analysis_team/reports/2026-11-22_1818_lstm.md",
+      "summary": "직전 회차에서 지적된 \"영구 이어학습으로 인한 패턴 고착\" 문제는 `FINETUNE_CHAIN_LENGTH_RESET_THRESHOLD=30`(약 3일 주기 강제 전체재학습)으로 이미 해소되어 있고, 구조는 전반적으로 안정적이나, 피처 전처리 단계에서 새로 확인한 스케일/임계값 이슈 2"
     },
     "risk": {
       "role": "risk",
       "role_label": "리스크 분석가",
-      "timestamp": "2026-11-22_1723",
-      "path": "analysis_team/reports/2026-11-22_1723_risk.md",
-      "summary": "TRADE_FRACTION 50% 집중 리스크와 물타기형 손절선 후퇴 문제는 이미 이전 분석에서 발견되어 코드에 반영되어 있고, 지금 구조는 전반적으로 양호하다. 남은 과제는 \"코인별 리스크 비대칭\"과 \"시장 전체 동시 충격\" 여부를 구분할 지표가 부족하다는 점이다."
+      "timestamp": "2026-11-22_1818",
+      "path": "analysis_team/reports/2026-11-22_1818_risk.md",
+      "summary": "TRADE_FRACTION·물타기형 손절선 후퇴 문제는 이전 회차 수정이 그대로 유지되고 있어 재확인 완료(양호). 코인별 변동성 비대칭 문제도 데이터 수집(`stop_loss_counts_by_coin`)과 대시보드 노출까지 이미 갖춰져 있어 구조는 건전하나, \"동시다발 충격\"과 \"장"
     },
     "storage": {
       "role": "storage",
       "role_label": "데이터/저장소 분석가",
-      "timestamp": "2026-11-22_1723",
-      "path": "analysis_team/reports/2026-11-22_1723_storage.md",
-      "summary": "인덱스/보관주기/동시성 처리는 이전 여러 차례의 분석을 거쳐 쿼리 패턴에 맞게 이미 잘 구현되어 있으며, 남은 가장 구체적인 개선 여지는 `snapshots` 테이블의 보관주기 설정값과 `portfolios` 합성키 스키마 두 가지다."
+      "timestamp": "2026-11-22_1818",
+      "path": "analysis_team/reports/2026-11-22_1818_storage.md",
+      "summary": "인덱스/동시성 설계는 이번 재검토에서도 견고함을 재확인했고, `prediction_accuracy_by_coin()`의 윈도우 함수 쿼리가 대시보드 15초 polling 핫패스에서 데이터가 쌓일수록(최대 90일치) 전체 파티션을 매번 다시 훑는 구조적 비효율이 새로 확인됨; `portf"
     },
     "strategy": {
       "role": "strategy",
       "role_label": "전략 분석가",
-      "timestamp": "2026-11-22_1723",
-      "path": "analysis_team/reports/2026-11-22_1723_strategy.md",
-      "summary": "4개 조건식 모두 로직 자체는 교과서적으로 타당하지만, 파라미터는 일봉/시간봉급 기본값을 그대로 쓰고 있고, 거래량을 전혀 반영하지 않아 1분봉 스캘핑 환경(노이즈·급등락·거래량 바닥)에 취약하다."
+      "timestamp": "2026-11-22_1818",
+      "path": "analysis_team/reports/2026-11-22_1818_strategy.md",
+      "summary": "직전 리포트(2026-11-22_1723)가 지적한 \"파라미터가 일봉/시간봉급, 거래량 미반영, ma_cross_rsi·macd_momentum 상관관계, macd 제로크로스 임계치 부재\" 문제는 코드를 다시 확인한 결과 **전부 그대로 남아 있음**(수정 흔적 없음). 추가로 평균회귀"
     },
     "synthesizer": {
       "role": "synthesizer",
       "role_label": "종합 조정자",
-      "timestamp": "2026-11-22_1723",
-      "path": "analysis_team/reports/2026-11-22_1723_synthesizer.md",
-      "summary": "**1. data_fetcher.py 478-480행 — on_progress 콜백 예외처리 추가 (execution)**"
+      "timestamp": "2026-11-22_1818",
+      "path": "analysis_team/reports/2026-11-22_1818_synthesizer.md",
+      "summary": "1. **storage.py 594-634행 `prediction_accuracy_by_coin()` 시간 하한 추가** — `WHERE resolved=1` 절(617행 근처)에 최근 3~7일 제한을 걸어, dashboard.py 904행의 15초 폴링마다 코인당 최대 13만 행을 매"
     }
   }
 }
