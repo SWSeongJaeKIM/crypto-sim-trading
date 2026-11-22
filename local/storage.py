@@ -86,7 +86,12 @@ def parse_portfolio_key(key: str) -> tuple[str, str]:
     스키마를 바꿀 필요는 없지만(기존 데이터 마이그레이션 비용 대비 이득이
     작음), 다음에 portfolios 테이블 스키마를 손보게 되면 (strategy, variant)
     복합 PK로 전환해 이 역파싱 폴백 자체를 없애는 것을 고려할 것
-    (analysis_team storage 리포트 2026-11-22_1219 발견점 #2)."""
+    (analysis_team storage 리포트 2026-11-22_1219 발견점 #2). 단, 이 합성키
+    문자열은 portfolios뿐 아니라 trades.strategy/snapshots.strategy/
+    slot_values.strategy 컬럼에도 동일하게 저장되므로(main_loop.py의
+    add_trades/add_snapshot/add_slot_values 호출부 참고), 실제 전환 시 영향
+    범위는 이 4개 테이블 전부다 (analysis_team storage 리포트
+    2026-11-22_2224 발견점 #4)."""
     strategy, sep, variant = key.rpartition(PORTFOLIO_KEY_SEP)
     if not sep or variant not in ("reset", "cumulative"):
         return key, "cumulative"
