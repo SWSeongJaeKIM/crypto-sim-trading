@@ -1,47 +1,47 @@
 {
-  "generated_at": "2026-11-22_2224",
+  "generated_at": "2026-11-22_2318",
   "roles": {
     "execution": {
       "role": "execution",
       "role_label": "실행/버그 분석가",
-      "timestamp": "2026-11-22_2224",
-      "path": "analysis_team/reports/2026-11-22_2224_execution.md",
-      "summary": "예외처리 격리, API 페이지네이션/rate limit 대응, 사이클 드리프트 보정, 로그 쓰로틀링 등 핵심 실행 안전장치는 이미 매우 성숙하게 구현되어 있어 치명적인 새 문제는 발견되지 않았고, 진단성 측면에서 사소한 개선 여지만 남아 있다."
+      "timestamp": "2026-11-22_2318",
+      "path": "analysis_team/reports/2026-11-22_2318_execution.md",
+      "summary": "예외처리·재시도·레이트리밋·60초 사이클 드리프트 보정은 이미 상당히 성숙한 수준이며 치명적 버그는 없었다. 다만 (1) 일별 DB 정리(prune) 작업의 소요시간이 로그/드리프트 감시 양쪽에서 빠져 있고, (2) 캔들 가격값 자체에 대한 수치 유효성 검증이 없다는 2가지 개선 지점이"
     },
     "lstm": {
       "role": "lstm",
       "role_label": "LSTM 분석가",
-      "timestamp": "2026-11-22_2224",
-      "path": "analysis_team/reports/2026-11-22_2224_lstm.md",
-      "summary": "파인튠 균형(체인 추적+리셋)과 확신구간 기준 롤백은 이미 잘 다뤄져 있고, 모델 구조(SEQ_LEN=60, hidden=32)도 노이즈가 큰 1분봉 데이터 규모에 비해 적절해 보인다. 남은 공백은 ① 피처 구성이 자기 코인의 가격/볼륨 지표에만 갇혀 있는 점, ② 90일 학습 윈도우가"
+      "timestamp": "2026-11-22_2318",
+      "path": "analysis_team/reports/2026-11-22_2318_lstm.md",
+      "summary": "피처·구조·롤백 안전장치는 이미 상당히 성숙한 수준이나, NEUTRAL_BAND가 코인별 변동성을 반영하지 못하는 점과 가격·거래량 단일 자산 피처만 쓰는 점이 1분봉 방향성 예측의 한계로 남아있다."
     },
     "risk": {
       "role": "risk",
       "role_label": "리스크 분석가",
-      "timestamp": "2026-11-22_2224",
-      "path": "analysis_team/reports/2026-11-22_2224_risk.md",
-      "summary": "TRADE_FRACTION 집중 리스크와 물타기형 손절선 후퇴는 구조적으로 이미 잘 억제돼 있고(여러 차례 검증됨), 6코인 균등배분/변동성 불일치 문제도 이미 반복적으로 검토되어 \"운영 데이터 확인 전까지 보류\"로 결정된 상태라 재론하지 않는다. 이번에 새로 짚을 지점은 \"리셋(7일)"
+      "timestamp": "2026-11-22_2318",
+      "path": "analysis_team/reports/2026-11-22_2318_risk.md",
+      "summary": "자금 배분·레버리지·손절 로직의 핵심 리스크는 이전 분석에서 대부분 선제적으로 보완되어 있고(최초진입가 고정, MDD, 롱/숏 notional 동일화 등), 현재 남아있는 가장 실질적인 리스크는 \"변동성이 다른 6개 코인에 동일한 비율로 베팅\"하는 구조다."
     },
     "storage": {
       "role": "storage",
       "role_label": "데이터/저장소 분석가",
-      "timestamp": "2026-11-22_2224",
-      "path": "analysis_team/reports/2026-11-22_2224_storage.md",
-      "summary": "스키마/인덱스/보관주기(prune)/동시성은 이미 수십 차례 리뷰를 거쳐 실제 쿼리 패턴에 맞게 성숙해 있고, 유일하게 보탤 만한 새 포인트는 `portfolios` 네이밍 TODO의 \"영향 범위\"가 실제로는 portfolios 한 테이블이 아니라 4개 테이블 전체라는 점이다."
+      "timestamp": "2026-11-22_2318",
+      "path": "analysis_team/reports/2026-11-22_2318_storage.md",
+      "summary": "`local/storage.py`는 스키마/인덱스/보관주기/동시성 처리가 이미 여러 차례 분석팀 피드백을 거쳐 상당히 성숙한 상태이고, 이번 회차에서는 `trades` 테이블을 집계하는 두 대시보드 조회 함수에 시간 범위 제한이 없다는 점이 유일하게 남은 실질적 개선 포인트다."
     },
     "strategy": {
       "role": "strategy",
       "role_label": "전략 분석가",
-      "timestamp": "2026-11-22_2224",
-      "path": "analysis_team/reports/2026-11-22_2224_strategy.md",
-      "summary": "4개 조건식의 매수/매도 로직 자체는 타당하지만, bollinger_rsi의 \"반복 신호\" 구조와 거래량(volume) 정보 미사용, 그리고 3개 추세 전략 간 신호 중복 가능성이 코드 구조상 확인되는 새로운 포인트입니다. (파라미터가 일봉 기준값이라는 점은 이미 2026-11-22 리"
+      "timestamp": "2026-11-22_2318",
+      "path": "analysis_team/reports/2026-11-22_2318_strategy.md",
+      "summary": "4개 조건식의 교차/밴드 로직 자체는 타당하지만, MACrossRSI의 RSI 매도 필터가 급락 상황에서 오히려 청산을 막을 수 있고, 4개 중 3개가 사실상 같은 방향으로 움직이는 추세추종형이라 다양성이 부족하다."
     },
     "synthesizer": {
       "role": "synthesizer",
       "role_label": "종합 조정자",
-      "timestamp": "2026-11-22_2224",
-      "path": "analysis_team/reports/2026-11-22_2224_synthesizer.md",
-      "summary": "**1. bollinger_rsi 엣지 트리거화 (strategy 리포트 제안1, strategies.py 225~258행)**"
+      "timestamp": "2026-11-22_2318",
+      "path": "analysis_team/reports/2026-11-22_2318_synthesizer.md",
+      "summary": "**1. 캔들 가격값 유효성 검증 추가 (execution)** — `local/main_loop.py`의 `prices_krw = {coin: float(df[\"close\"].iloc[-1]) ...}` 컴프리헨션에 `pd.notna(...)` 및 `> 0` 조건을 추가해, Upbit"
     }
   }
 }
