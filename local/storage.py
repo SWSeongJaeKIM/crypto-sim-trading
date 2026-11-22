@@ -58,9 +58,21 @@ def make_portfolio_key(strategy: str, variant: str) -> str:
     시점엔 조용히 성공하지만 읽기 시점(parse_portfolio_key)에서 구분자를 못 찾아
     전체 키를 strategy로, variant는 무조건 "cumulative"로 취급해버려 조용한
     데이터 오분류가 생긴다 — 쓰기 시점에 바로 실패시켜 그 문제를 막는다
-    (analysis_team 리포트 2026-11-16_1718_storage.md 제안)."""
+    (analysis_team 리포트 2026-11-16_1718_storage.md 제안).
+
+    strategy 자체에 구분자("__")가 들어가면 즉시 거부한다. parse_portfolio_key()는
+    rpartition으로 "가장 마지막" 구분자를 기준으로 역파싱해 지금의 합성키
+    생성/해석 범위에서는 정상 동작하지만, strategy 이름 자체에 우연히 "__"가
+    들어가면(예: "btc__v2") 이 키만 보고 strategy/variant를 구분해야 하는
+    다른 코드(수동 쿼리, 로그 분석 등)가 첫 구분자 기준으로 잘못 나눌 수
+    있는 모호함이 남는다 — 쓰기 시점에 막아 그 모호함 자체가 생기지 않게
+    한다 (analysis_team storage 리포트 2026-11-22_0417 발견점 #2)."""
     if variant not in ("reset", "cumulative"):
         raise ValueError(f"알 수 없는 portfolio variant: {variant!r} (reset/cumulative만 허용)")
+    if PORTFOLIO_KEY_SEP in strategy:
+        raise ValueError(
+            f"strategy 이름에 구분자({PORTFOLIO_KEY_SEP!r})를 포함할 수 없음: {strategy!r}"
+        )
     return f"{strategy}{PORTFOLIO_KEY_SEP}{variant}"
 
 
