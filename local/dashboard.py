@@ -819,7 +819,12 @@ def api_verify():
 
 @app.route("/api/data")
 def api_data():
-    with storage.connect() as conn:
+    # 이 블록 안에서 get_all_portfolios -> recent_trades -> model_training_history_by_coins
+    # -> prediction_accuracy_by_coin -> stop_loss_counts_by_coin을 순차 호출한다.
+    # main_loop.py가 사이클 커밋을 내는 순간 이 요청이 겹치면, consistent_read 없이는
+    # 응답 안의 값들이 서로 다른 사이클 시점으로 섞여 보일 수 있다(analysis_team
+    # storage 리포트 2026-11-23_0117 발견점 #1, synthesizer Top3 #3).
+    with storage.connect(consistent_read=True) as conn:
         portfolios_raw = storage.get_all_portfolios(conn)
         meta = storage.get_meta(conn, "status") or {}
         progress = storage.get_meta(conn, "progress") or {}

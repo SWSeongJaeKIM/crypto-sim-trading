@@ -269,7 +269,7 @@ class _RetryingConnection(sqlite3.Connection):
 
 
 @contextmanager
-def connect(db_path: Path | str = DB_PATH):
+def connect(db_path: Path | str = DB_PATH, consistent_read: bool = False):
     # main_loop(사이클/재학습 중 진행상태 기록)와 dashboard(주기적으로 읽기),
     # 그리고 retrain_now.py를 수동으로 같이 돌리는 경우까지 — 여러 프로세스가
     # 동시에 같은 DB 파일을 열 수 있다. 기본 journal_mode로는 "database is
@@ -308,6 +308,18 @@ def connect(db_path: Path | str = DB_PATH):
             conn.executescript(SCHEMA)
             conn.commit()
             _schema_initialized_paths.add(key)
+
+        if consistent_read:
+            # dashboard.py의 /api/data처럼 한 요청 안에서 SELECT를 여러 번
+            # 순차 호출하는 경우, Python sqlite3는 SELECT만 있으면 명시적
+            # BEGIN 없이는 트랜잭션을 열지 않는다 — main_loop.py가 사이클마다
+            # 커밋을 내는 그 순간에 요청이 겹치면, 같은 응답 안의 포트폴리오/
+            # 거래내역/예측적중률이 서로 다른 사이클 값으로 섞여 보일 수 있다.
+            # BEGIN DEFERRED로 읽기 트랜잭션을 열어두면 이 블록의 모든 SELECT가
+            # 하나의 WAL 스냅샷을 보게 된다(analysis_team storage 리포트
+            # 2026-11-23_0117 발견점 #1). 조회 전용 블록에서만 쓰고 짧게
+            # 유지할 것 — 열려 있는 동안 WAL 체크포인트가 밀릴 수 있다.
+            conn.execute("BEGIN DEFERRED")
 
         yield conn
         conn.commit()
