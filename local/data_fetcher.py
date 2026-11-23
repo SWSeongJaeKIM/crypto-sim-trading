@@ -66,6 +66,17 @@ class FetchError(Exception):
 # 모듈은 전략이 없으므로 (코인, 예외타입)만으로 구분한다.
 _warned_repeated_exception: dict[tuple[str, str], float] = {}
 _REPEATED_EXCEPTION_LOG_INTERVAL_SEC = 3600  # 1시간마다 전체 트레이스 1회
+# fetch_all_latest_candles/fetch_all_minute_history는 6개 코인을 각자 스레드로
+# 동시에 돌리고, 그 스레드들이 모두 이 딱 하나의 _warned_repeated_exception
+# 딕셔너리를 락 없이 읽고 썼다. CPython GIL이 개별 dict 연산(get/설정) 자체를
+# 깨뜨리지는 않지만, "읽고(get) -> 판단하고 -> 쓰는(설정)" 구간이 원자적이지
+# 않아, 두 스레드가 거의 동시에 같은 (코인, 예외타입) 키를 처음 겪으면 둘 다
+# "아직 안 남겼다"고 판단해 전체 트레이스를 중복으로 남기거나, 반대로 한
+# 스레드의 갱신이 다른 스레드의 판단 시점과 어긋나 쓰로틀 타이밍이 흔들릴 수
+# 있었다 (analysis_team execution 리포트 2026-11-23_0219 발견점 #3). 실질적
+# 피해는 작지만(최악의 경우 1시간 창에 트레이스가 1회 더 남는 정도), 간단한
+# 락으로 저렴하게 막는다.
+_warned_repeated_exception_lock = threading.Lock()
 
 
 def _log_fetch_exception(log_prefix: str, coin: str, e: Exception) -> None:
@@ -76,10 +87,17 @@ def _log_fetch_exception(log_prefix: str, coin: str, e: Exception) -> None:
     완화한다(main_loop.py의 동일 패턴과 같은 트레이드오프)."""
     key = (coin, type(e).__name__)
     now_mono = time.monotonic()
-    last_logged = _warned_repeated_exception.get(key)
-    if last_logged is None or (now_mono - last_logged) >= _REPEATED_EXCEPTION_LOG_INTERVAL_SEC:
+    with _warned_repeated_exception_lock:
+        last_logged = _warned_repeated_exception.get(key)
+        should_log_full_trace = (
+            last_logged is None or (now_mono - last_logged) >= _REPEATED_EXCEPTION_LOG_INTERVAL_SEC
+        )
+        if should_log_full_trace:
+            _warned_repeated_exception[key] = now_mono
+    # log.exception()은 I/O(파일 쓰기)를 하므로 락을 쥔 채로 호출하지 않는다 —
+    # 락은 딕셔너리 읽기/쓰기 구간만 보호하면 충분하다.
+    if should_log_full_trace:
         log.exception(f"{log_prefix}: {e}")
-        _warned_repeated_exception[key] = now_mono
     else:
         log.warning(f"{log_prefix} (반복 중, 같은 종류 {_REPEATED_EXCEPTION_LOG_INTERVAL_SEC}초 내 "
                     f"전체 트레이스는 이미 남겼음): {type(e).__name__}: {e}")
