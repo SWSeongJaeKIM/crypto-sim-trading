@@ -157,6 +157,16 @@ _warned_missing_model: set[str] = set()
 _warned_repeated_exception: dict[tuple[str, str, str], float] = {}
 _REPEATED_EXCEPTION_LOG_INTERVAL_SEC = 3600  # 1시간(60사이클)마다 전체 트레이스 1회
 
+# retrain_lstm()의 코인별 학습 예외는 위 _warned_repeated_exception과 같은
+# "일정 시간마다 1회만 전체 트레이스" 패턴이지만, 호출 주기가 사이클(1분)이
+# 아니라 재학습 슬롯(하루 RETRAIN_TIMES_LOCAL회, 약 2시간24분 간격)이라 별도
+# 쓰로틀 간격을 쓴다. 같은 간격(1시간)을 그대로 쓰면 슬롯 사이 간격이 이미
+# 더 길어 매번 전체 트레이스가 남아 사실상 쓰로틀 효과가 없기 때문이다. 키는
+# (코인, 예외타입) — 코인별 재학습은 전역 커넥션 없이 독립적으로 돌아 전략명이
+# 없다 (analysis_team execution 리포트 2026-11-23_0418 발견점 #2).
+_warned_retrain_exception: dict[tuple[str, str], float] = {}
+_RETRAIN_EXCEPTION_LOG_INTERVAL_SEC = 24 * 3600  # 24시간(약 10슬롯)마다 전체 트레이스 1회
+
 # run_one_cycle()에서 특정 코인만 이번 사이클 캔들 수집에 실패하면(예: Upbit
 # API 일시 오류로 그 코인만 None), prices_krw/candles에서 조용히 빠지고
 # 그 코인은 신호 계산뿐 아니라 손절/강제청산 체크(435행 근처)까지 이번
@@ -769,7 +779,21 @@ def retrain_lstm() -> bool:
             # last_retrain_at 미갱신 -> 다음 사이클에 90일 데이터 재수집+전체 재학습
             # 반복)로 번지지 않도록 코인 단위로 격리한다. run_one_cycle()의
             # 전략/코인 단위 예외 격리(analysis_team 리포트 2026-11-16_1422)와 동일한 패턴.
-            log.exception(f"[retrain/{coin}] 학습 중 에러, 이 코인만 이번 슬롯 건너뜀: {e}")
+            # 로그 자체는 run_one_cycle()의 _warned_repeated_exception과 동일한
+            # "일정 시간마다 1회만 전체 트레이스" 패턴을 재사용한다 — 이전에는
+            # 이 블록만 쓰로틀이 없어, 같은 코인이 여러 슬롯(수개월) 연속 실패하면
+            # 전체 스택트레이스가 매 슬롯 중복 적재됐다 (analysis_team execution
+            # 리포트 2026-11-23_0418 발견점 #2, synthesizer Top3 #2).
+            repeat_key = (coin, type(e).__name__)
+            last_logged = _warned_retrain_exception.get(repeat_key)
+            now_mono = time.monotonic()
+            if last_logged is None or (now_mono - last_logged) >= _RETRAIN_EXCEPTION_LOG_INTERVAL_SEC:
+                log.exception(f"[retrain/{coin}] 학습 중 에러, 이 코인만 이번 슬롯 건너뜀: {e}")
+                _warned_retrain_exception[repeat_key] = now_mono
+            else:
+                log.warning(f"[retrain/{coin}] 학습 중 에러 반복 중 (같은 종류 "
+                             f"{_RETRAIN_EXCEPTION_LOG_INTERVAL_SEC}초 내 전체 트레이스는 "
+                             f"이미 남겼음, 이 코인만 이번 슬롯 건너뜀): {type(e).__name__}: {e}")
             r = {
                 "coin": coin,
                 "trained": False,
