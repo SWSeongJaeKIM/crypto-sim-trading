@@ -657,22 +657,45 @@ def run_one_cycle(conn) -> float | None:
                 # 이번 사이클 값으로 반영된 문서가 저장된다 (analysis_team risk
                 # 리포트 2026-11-22_0918 발견점 #4, synthesizer Top3 #2).
                 pf.update_drawdown(total_value)
-                storage.set_portfolio(conn, key, pf.to_doc(), now)
-                # new_trades_as_dicts()는 [asdict(t) for t in self.new_trades]로 순수
-                # 읽기 연산이라(portfolio.py) 변수로 캐싱해 재사용해도 안전하다 — 이번
-                # 사이클 거래 건수 집계를 위해 한 번만 계산해서 add_trades와 카운터
-                # 양쪽에 쓴다.
-                _trades = pf.new_trades_as_dicts()
-                storage.add_trades(conn, key, _trades)
-                _trades_this_cycle += len(_trades)
-                storage.add_snapshot(conn, key, now, total_value, pnl_pct)
-                # 코인별 자금 쏠림(slot) 시계열 — cumulative 모드에서 반복
-                # 손절로 생기는 코인 간 드리프트를 사후 분석할 수 있게 한다.
-                # 이미 계산만 하고 저장은 안 하던 slot_values_krw() 호출을
-                # 추가한 것뿐이라 배분/손절선 등 매매 판단에는 영향 없음
-                # (analysis_team risk 리포트 2026-11-22_1922 발견점 #2,
-                # synthesizer Top3 #3).
-                storage.add_slot_values(conn, key, now, pf.slot_values_krw(prices_krw))
+                try:
+                    # set_portfolio/add_trades/add_snapshot/add_slot_values 4개
+                    # 쓰기를 모드 단위로 한 번 더 감싼다. 기존에는 이 중 하나(예:
+                    # add_trades)에서만 예외가 나도 그대로 전파되어 바로 아래
+                    # 전략 레벨 except로 빠져나갔다 — 이미 실행된 set_portfolio는
+                    # 이번 사이클 트랜잭션에 그대로 남아 사이클 끝에 커밋되는
+                    # 반면, 뒤이은 add_trades/add_snapshot/add_slot_values는
+                    # 호출되지 않아 "포트폴리오 평가금액은 갱신됐는데 그 사이클의
+                    # 거래/스냅샷 로그는 없는" 불일치가 남을 뿐 아니라, 같은
+                    # 전략의 다른 모드(reset/cumulative)까지 이번 사이클 저장이
+                    # 전부 건너뛰어졌다 (analysis_team storage 리포트
+                    # 2026-11-23_0219 발견점 #1). 이미 적용된 전략 단위 격리(548행
+                    # 근처)와 코인 단위 격리(576행 근처)와 같은 패턴을 모드 단위
+                    # 에도 적용해, 한 모드의 저장 실패가 같은 전략의 다른 모드나
+                    # 다른 전략까지 건너뛰게 하지 않는다. (완전한 원자성에는 DB
+                    # savepoint가 필요하지만, 최소한 실패 전파 범위를 이 모드
+                    # 하나로 좁힌다.)
+                    storage.set_portfolio(conn, key, pf.to_doc(), now)
+                    # new_trades_as_dicts()는 [asdict(t) for t in self.new_trades]로 순수
+                    # 읽기 연산이라(portfolio.py) 변수로 캐싱해 재사용해도 안전하다 — 이번
+                    # 사이클 거래 건수 집계를 위해 한 번만 계산해서 add_trades와 카운터
+                    # 양쪽에 쓴다.
+                    _trades = pf.new_trades_as_dicts()
+                    storage.add_trades(conn, key, _trades)
+                    _trades_this_cycle += len(_trades)
+                    storage.add_snapshot(conn, key, now, total_value, pnl_pct)
+                    # 코인별 자금 쏠림(slot) 시계열 — cumulative 모드에서 반복
+                    # 손절로 생기는 코인 간 드리프트를 사후 분석할 수 있게 한다.
+                    # 이미 계산만 하고 저장은 안 하던 slot_values_krw() 호출을
+                    # 추가한 것뿐이라 배분/손절선 등 매매 판단에는 영향 없음
+                    # (analysis_team risk 리포트 2026-11-22_1922 발견점 #2,
+                    # synthesizer Top3 #3).
+                    storage.add_slot_values(conn, key, now, pf.slot_values_krw(prices_krw))
+                except Exception as e:
+                    log.exception(f"[{key}] 포트폴리오/거래/스냅샷/슬롯값 저장 중 에러 — 이번 "
+                                   f"사이클 이 모드의 저장만 건너뜀 (같은 전략의 다른 모드나 "
+                                   f"다른 전략의 저장에는 영향 없음, 이미 실행된 일부 저장 "
+                                   f"호출은 이번 사이클 트랜잭션에 남아 커밋될 수 있음): {e}")
+                    continue
         except Exception as e:
             log.exception(f"[{strat_name}] 전략 처리 중 에러, 이번 사이클은 건너뜀 "
                            f"(이미 처리된 다른 전략들의 매매 기록에는 영향 없음): {e}")
