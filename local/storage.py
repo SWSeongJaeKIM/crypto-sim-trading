@@ -510,11 +510,23 @@ def add_prediction(conn, coin: str, predicted_at: str, prob_up: float, price_at_
     )
 
 
-def resolve_predictions(conn, current_prices_krw: dict[str, float]) -> int:
+def resolve_predictions(conn, current_prices_krw: dict[str, float], limit: int = 5000) -> int:
     """아직 확정 안 된(resolved=0) 예측들 중, 예측 시점과 다른(=1사이클 지난) 것들을
     현재가로 확정짓는다. 예측방향(UP/DOWN)과 실제 가격변화 방향이 일치하면 correct=1.
-    반환: 이번에 확정한 건수."""
-    rows = conn.execute("SELECT * FROM predictions WHERE resolved = 0").fetchall()
+    반환: 이번에 확정한 건수.
+
+    평상시엔 resolved=0인 행이 코인 수만큼(수십 건)뿐이라 전체 조회가 가볍지만,
+    가격 피드가 수일간 끊기는 장애 상황에서는 prune_stale_unresolved_predictions()가
+    정리하기 전까지 매 사이클(1분)마다 미확정 행이 계속 누적된 채로 LIMIT 없이 전부
+    읽혀, 가장 안 좋은 타이밍(장애 상황)에 사이클 비용이 커지는 구조였다
+    (analysis_team storage 리포트 2026-11-23_0318 발견점 #1, synthesizer Top3 #1).
+    limit으로 한 사이클에 처리할 상한을 두고, predicted_at 오래된 것부터 먼저
+    처리해 남은 건 다음 사이클에서 이어서 확정하도록 한다. 평상시(미확정 건이
+    limit 미만)에는 동작이 기존과 동일하다."""
+    rows = conn.execute(
+        "SELECT * FROM predictions WHERE resolved = 0 ORDER BY predicted_at ASC LIMIT ?",
+        (limit,),
+    ).fetchall()
     # 미확정 건마다 개별 UPDATE 왕복을 내지 않고, 한 번에 적용할 변경을 모아
     # executemany로 한 번에 묶어서 실행한다 (가격 피드 지연 등으로 미확정 건이
     # 일시적으로 쌓였을 때 N번 왕복이 생기는 걸 막는다). 결과는 기존과 동일.
