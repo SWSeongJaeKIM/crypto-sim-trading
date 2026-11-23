@@ -735,6 +735,7 @@ def retrain_lstm() -> bool:
             r = {
                 "coin": coin,
                 "trained": False,
+                "finetuned": False,
                 "reason": f"exception: {e}",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
@@ -742,24 +743,40 @@ def retrain_lstm() -> bool:
         log.info(f"  {r}")
         # 학습할 때마다 누적 기록 (덮어쓰지 않음) — 대시보드에서 정확도 추이를 보기 위함
         # 이 코인 학습이 막 끝난 짧은 순간에만 connect해서 바로 commit+close.
-        with storage.connect() as conn:
-            storage.add_model_training(conn, {
-                "coin": coin,
-                "timestamp": r.get("timestamp", datetime.now(timezone.utc).isoformat()),
-                "model_type": "lstm_finetune" if r.get("finetuned") else "lstm_initial",
-                "feature_cols": lstm_model.FEATURE_COLS,
-                "seq_len": r.get("seq_len", lstm_model.SEQ_LEN),
-                "history_days": HISTORY_DAYS_FOR_TRAIN,
-                "data_start": r.get("data_start"),
-                "data_end": r.get("data_end"),
-                "n_samples": r.get("n_samples"),
-                "n_train": r.get("n_train"),
-                "n_val": r.get("n_val"),
-                "val_accuracy": r.get("val_accuracy"),
-                "epochs": r.get("epochs"),
-                "trained": r.get("trained", False),
-                "reason": r.get("reason", ""),
-            })
+        # add_model_training() 저장 자체에도 try/except를 둔다 — 코인별 학습(위
+        # try/except)과 달리 이 블록은 예외 보호가 없어서, 일시적 DB 오류
+        # (예: database is locked) 하나가 이 for 루프 밖으로 전파되면 (a) 아직
+        # 처리 못한 나머지 코인은 이번 슬롯 학습 자체가 누락되고, (b) 이미 학습까지
+        # 끝낸 앞선 코인들도 아래 any_trained 판정에 도달하지 못해 last_lstm_train이
+        # 갱신되지 않아 다음 사이클(1분 후)에 전체 코인 재학습이 중복된다
+        # (analysis_team execution 리포트 2026-11-23_0117 발견점 #1).
+        try:
+            with storage.connect() as conn:
+                storage.add_model_training(conn, {
+                    "coin": coin,
+                    "timestamp": r.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                    "model_type": (
+                        ("lstm_finetune" if r.get("finetuned") else "lstm_initial")
+                        if r.get("trained") else "lstm_failed"
+                    ),
+                    "feature_cols": lstm_model.FEATURE_COLS,
+                    "seq_len": r.get("seq_len", lstm_model.SEQ_LEN),
+                    "history_days": HISTORY_DAYS_FOR_TRAIN,
+                    "data_start": r.get("data_start"),
+                    "data_end": r.get("data_end"),
+                    "n_samples": r.get("n_samples"),
+                    "n_train": r.get("n_train"),
+                    "n_val": r.get("n_val"),
+                    "val_accuracy": r.get("val_accuracy"),
+                    "epochs": r.get("epochs"),
+                    "trained": r.get("trained", False),
+                    "reason": r.get("reason", ""),
+                })
+        except Exception as e:
+            # 모델 가중치는 이미 저장됐을 수 있음(lstm_model.train_model 내부에서
+            # 별도로 저장) — 여기서 잡는 예외는 "학습 기록(DB row)" 저장 실패일 뿐이다.
+            log.exception(f"[retrain/{coin}] 학습 기록 저장 실패, 이 코인만 이번 슬롯 기록 누락"
+                           f"(모델 가중치는 저장되었을 수 있음): {e}")
 
     # analysis_team 리포트 2026-11-21_2118(execution/synthesizer Top3 #1): results가
     # 전부 trained=False(예: 데이터 수집 전체 실패, 코인별 예외 전부 발생)여도
