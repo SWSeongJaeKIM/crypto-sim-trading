@@ -394,6 +394,7 @@ function renderCards(containerId, mode) {
         <div class="${cls}" style="font-size:14px;margin-top:2px;">${pnlSign}${Math.round(p.pnl_krw).toLocaleString()}원</div>
         <div style="color:#9aa0a6;font-size:12px;margin-top:4px;">평가액 ${Math.round(p.total_value_krw).toLocaleString()}원 (원금 ${Math.round(p.initial_capital_krw).toLocaleString()}원) · 거래 ${p.trade_count}건</div>
         <div style="color:#9aa0a6;font-size:11px;margin-top:2px;">최대낙폭(MDD) -${(p.max_drawdown_pct || 0).toFixed(2)}%</div>
+        <div style="color:#9aa0a6;font-size:11px;margin-top:2px;">누적 수수료 ${Math.round(p.total_fees_krw || 0).toLocaleString()}원</div>
         ${resetNote}
         <div style="display:${isOpen ? 'block' : 'none'};">${renderPositionDetail(p.slots || [])}</div>
       </div>`;
@@ -900,6 +901,12 @@ def api_data():
                 # (analysis_team risk 리포트 2026-11-22_0918, synthesizer
                 # Top3 #2 — portfolio.py의 peak_value_krw/max_drawdown_pct).
                 "max_drawdown_pct": pf.max_drawdown_pct,
+                # 장기 성과 저하가 "신호 품질 문제"인지 "수수료 누적 문제"인지
+                # 구분할 지표가 없었다(analysis_team risk 리포트 2026-11-23_0117
+                # 발견점 #4, synthesizer Top3 #2 — portfolio.py의
+                # total_fees_krw). 이 필드 추가 이전 거래의 수수료는 소급
+                # 집계되지 않으므로, 추가 시점 이후부터만 정확하다.
+                "total_fees_krw": pf.total_fees_krw,
                 "trade_count": doc.get("trade_count", 0),
                 "created_at": doc.get("created_at"),
                 "slots": slots,

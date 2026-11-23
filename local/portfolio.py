@@ -122,6 +122,13 @@ class Portfolio:
     # 다시 추적을 시작하게 된다(과거 데이터를 추정해서 채우지 않음).
     peak_value_krw: float = 0.0
     max_drawdown_pct: float = 0.0
+    # 매 거래마다 계산되는 fee는 지금까지 Trade.reason 문자열에만 남고 집계되지
+    # 않아, 장기 성과 저하가 "신호 품질 문제"인지 "수수료 누적 문제"인지 구분할
+    # 지표가 없었다(analysis_team risk 리포트 2026-11-23_0117 발견점 #4,
+    # synthesizer Top3 #2). buy/sell/open_short/close_short 각각에서 누적한다.
+    # peak_value_krw와 동일한 이유로 이 필드 추가 이후의 수수료만 정확하다
+    # (과거 거래분은 거슬러 계산하지 않음 — 마이그레이션 불필요).
+    total_fees_krw: float = 0.0
 
     @classmethod
     def new(cls, strategy_name: str, coins: list[str] | None = None,
@@ -154,6 +161,7 @@ class Portfolio:
         slot.qty = new_qty
         slot.cash_krw -= spend
         slot.cash_krw -= fee
+        self.total_fees_krw += fee
         self.new_trades.append(Trade(
             timestamp=datetime.now(timezone.utc).isoformat(),
             coin=coin, side="BUY", price_krw=price_krw, qty=qty,
@@ -174,6 +182,7 @@ class Portfolio:
         fee = proceeds * FEE_RATE
         slot.qty -= qty_to_sell
         slot.cash_krw += proceeds - fee
+        self.total_fees_krw += fee
         if slot.qty <= 1e-12:
             slot.qty = 0.0
             slot.avg_cost_krw = 0.0
@@ -214,6 +223,7 @@ class Portfolio:
         slot.short_margin_krw += margin
         slot.cash_krw -= margin
         slot.cash_krw -= fee
+        self.total_fees_krw += fee
         self.new_trades.append(Trade(
             timestamp=datetime.now(timezone.utc).isoformat(),
             coin=coin, side="SHORT_OPEN", price_krw=price_krw, qty=qty,
@@ -246,6 +256,7 @@ class Portfolio:
         slot.short_qty -= qty_to_close
         slot.short_margin_krw -= margin_released
         slot.cash_krw += returned
+        self.total_fees_krw += fee
         if slot.short_qty <= 1e-12:
             slot.short_qty = 0.0
             slot.short_avg_entry_krw = 0.0
@@ -420,6 +431,7 @@ class Portfolio:
             "updated_at": self.updated_at,
             "peak_value_krw": self.peak_value_krw,
             "max_drawdown_pct": self.max_drawdown_pct,
+            "total_fees_krw": self.total_fees_krw,
         }
 
     @classmethod
@@ -435,6 +447,7 @@ class Portfolio:
             updated_at=d.get("updated_at", datetime.now(timezone.utc).isoformat()),
             peak_value_krw=d.get("peak_value_krw", 0.0),
             max_drawdown_pct=d.get("max_drawdown_pct", 0.0),
+            total_fees_krw=d.get("total_fees_krw", 0.0),
         )
 
     def new_trades_as_dicts(self) -> list[dict]:
