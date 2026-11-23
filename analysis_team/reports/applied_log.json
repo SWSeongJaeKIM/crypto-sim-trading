@@ -2758,5 +2758,85 @@
         "decision": "skipped",
         "reason": "순수 진단용이라 매매 로직에는 영향이 없어 반영 기준(저위험) 자체는 만족하지만, synthesizer가 이번 회차 Top 3에 포함하지 않았고 slot_values_krw()가 이미 매 사이클 DB에 적재되며 dashboard.py가 코인별 slot_value를 이미 노출하고 있어(2026-11-22_1922 회차 적용) 긴급성이 낮다고 판단함. 집중도 %를 한 줄로 뽑아내는 편의 기능이라 다음 회차 이후 필요시 사람이 직접 판단해 추가해도 늦지 않음.",
         "commit": null
+    },
+    {
+        "timestamp": "2026-11-23_0017",
+        "proposal": "prediction_accuracy_by_coin()에 coins 파라미터를 추가해, dashboard.py가 이미 들고 있는 training_coins 리스트를 재사용하고 내부의 'SELECT DISTINCT coin FROM predictions' 풀스캔을 생략 (storage 리포트 발견점 #1, synthesizer Top3 #1)",
+        "role": "storage",
+        "decision": "applied",
+        "reason": "15초 polling 핫패스에서 매번 발생하던 불필요한 중복 조회를 없애는 순수 성능 개선이며, 매매 로직에는 전혀 영향이 없다. coins=None일 때 기존 DISTINCT 폴백(거래 유니버스 밖 과거 코인 포함)을 그대로 유지해 하위 호환을 보장했고, in-memory SQLite로 coins=None/coins=[...] 두 경로의 코인별 집계 결과가 동일함을 시뮬레이션으로 확인했다.",
+        "commit": "189612d"
+    },
+    {
+        "timestamp": "2026-11-23_0017",
+        "proposal": "data_fetcher.py의 force_full 판정을 '오늘 날짜가 바뀌었는가' 단일 기준 대신 코인 인덱스 기반 날짜 분산(day_of_year % len(COINS) == index)으로 바꿔, 6개 코인의 전체 재수집이 하루에 몰리지 않고 6일에 걸쳐 분산되게 함 + 재수집 시작 전 '오늘 force_full 예정 코인' 사전 로그 추가 (execution 리포트 발견점 #1·#2, synthesizer Top3 #2)",
+        "role": "execution",
+        "decision": "applied",
+        "reason": "자정 직후 첫 재학습 슬롯에서 6개 코인이 동시에 force_full로 전환되면 공유 리미터로 직렬화돼 최대 7~8분간 main_loop.py의 손절/강제청산 체크가 함께 멈추는 구조적 문제를 완화하는 안정성 개선이며, 매매 판단 로직(진입/청산/임계값/베팅비율)은 건드리지 않는다. 마커가 없는 코인(최초 실행)은 분산 일정과 무관하게 항상 강제 재수집하도록 유지해 캐시 공백을 방지했다. 날짜 분산 스케줄링 로직만 분리해 파이썬으로 시뮬레이션: 최초 실행 시 전체 강제, 이후 6일 주기로 분산, 마커 소실 코인은 즉시 강제 재수집됨을 확인했다. 트레이드오프(코인별 전체 데이터 정정 반영 주기가 매일->최대 6일)는 리포트가 이미 명시했고 모의투자 특성상 수용 가능하다고 판단.",
+        "commit": "f75d116"
+    },
+    {
+        "timestamp": "2026-11-23_0017",
+        "proposal": "ma_cross_rsi와 macd_momentum의 장기창(26봉)을 분리하거나, learner.py에서 두 전략의 신호 상관계수를 모니터링해 동시 신호 시 포지션 크기 중복 가산을 방지 (strategy 리포트 발견점 #1, 구체적 제안)",
+        "role": "strategy",
+        "decision": "skipped",
+        "reason": "전략 파라미터(장기 이동평균 창)를 바꾸는 것은 매매 진입 타이밍이라는 핵심 판단에 직접 영향을 주며, 리포트 자체도 '파라미터 변경이라 매매 빈도/수수료에 영향 — 반드시 백테스트로 확인 필요(실제 운영 데이터를 봐야 최종 판단 가능)'라고 명시함. 판단 기준 2번(코드 리뷰만으로 효과가 명백히 검증 가능한 경우에만 반영)을 만족하지 못해 반영하지 않음.",
+        "commit": null
+    },
+    {
+        "timestamp": "2026-11-23_0017",
+        "proposal": "bollinger_rsi에 'RSI가 저점에서 반등 중' 조건 추가 또는 ATR/변동성 필터로 추세장과 평균회귀장을 구분 (strategy 리포트 발견점 #3, 구체적 제안)",
+        "role": "strategy",
+        "decision": "skipped",
+        "reason": "진입 조건(핵심 판단)을 바꾸는 제안이며, 리포트 스스로 'RSI 반등 조건 추가 시 진입이 늦어져 초기 반등 구간 수익을 놓칠 수 있음(실제 영향은 백테스트 필요)'이라고 명시함. 코드 리뷰만으로 효과를 확정할 수 없어 반영하지 않음.",
+        "commit": null
+    },
+    {
+        "timestamp": "2026-11-23_0017",
+        "proposal": "4개 전략 공통으로 거래량(volume) 기반 최소 거래량 필터 헬퍼를 추가해 저유동성 구간에서 BUY/SELL을 막음 (strategy 리포트 발견점 #2, synthesizer Top3 #3)",
+        "role": "strategy",
+        "decision": "skipped",
+        "reason": "synthesizer가 Top3에 포함했지만, 이 필터는 진입/청산 조건(돈이 어떻게 움직이는지)을 직접 바꾸는 구조적 변경이다. 리포트 자체가 '거래량 필터 추가 시 저유동성 구간에서 매매 기회 자체가 줄어 신호 빈도가 낮아짐 — 과도하게 엄격하면 정상 변동도 걸러낼 위험'이라고 명시하고, synthesizer의 개선 설명에도 '임계값은 백테스트로 조정해 완화한다'고 되어 있어 효과가 코드 리뷰만으로 검증되지 않는다. 판단 기준 2번·5번에 따라 반영하지 않고, 다음 회차 이후 운영 데이터(백테스트)로 임계값을 검증한 뒤 사람이 직접 판단하도록 남겨둔다.",
+        "commit": null
+    },
+    {
+        "timestamp": "2026-11-23_0017",
+        "proposal": "LSTM 파인튜닝 미니배치 루프에서 BCEWithLogitsLoss(reduction='none') + 최근 샘플일수록 큰 weight를 주는 recency-weighted loss로 교체해 '최근 패턴 반영'을 LR과 분리된 손잡이로 조절 (lstm 리포트 발견점 #1, 구체적 제안 #1)",
+        "role": "lstm",
+        "decision": "skipped",
+        "reason": "모델 학습 방식 변경이 예측 신뢰도(결국 매매 베팅 비율로 이어짐)에 영향을 주는 변경이며, 리포트 스스로 'recency weighting을 넣으면 최근 짧은 구간의 급변동/이상치에 모델이 과하게 반응해 val_accuracy_confident가 오히려 불안정해질 수 있어 모니터링이 필요하다'고 명시해 효과가 코드 리뷰만으로 검증 가능하지 않음. 실제 val_accuracy 추이는 운영 데이터를 봐야 판단 가능하다는 판단 기준에 따라 반영하지 않음.",
+        "commit": null
+    },
+    {
+        "timestamp": "2026-11-23_0017",
+        "proposal": "FEATURE_COLS에 기준 코인(BTC) 1분 수익률 등 코인 간 상관관계 피처를 추가 (lstm 리포트 발견점 #2, 구체적 제안 #2)",
+        "role": "lstm",
+        "decision": "skipped",
+        "reason": "모델 입력 피처 구조를 바꾸는 변경으로 예측 결과(매매 판단의 입력)에 영향을 주며, 리포트 자체가 '코인별 결측/지연 데이터 정렬 로직이 추가로 필요해 구현 복잡도가 커진다'고 밝혀 코드 리뷰만으로 안전성/효과를 확정하기 어렵다. 판단 기준 2번·3번(기존 동작을 깨뜨릴 위험)에 따라 이번 회차에는 반영하지 않고 다음 회차 이후 사람이 직접 설계·검증하도록 남겨둔다.",
+        "commit": null
+    },
+    {
+        "timestamp": "2026-11-23_0017",
+        "proposal": "portfolio.py의 균등분배(initial_capital_krw / len(coins))를 코인별 최근 변동성 역가중 배분으로 변경 (risk 리포트 발견점 #1, 구체적 제안)",
+        "role": "risk",
+        "decision": "skipped",
+        "reason": "베팅 비율(자금 배분)이라는 매매 전략의 핵심 판단을 직접 바꾸는 변경이며, 리포트 스스로 '모든 전략을 동일 조건에서 비교하는 현재 실험 설계 목적과 상충할 수 있어 트레이드오프 검토가 선행돼야 한다'고 명시하고 실제 정도는 '운영 데이터(실거래 빈도)를 봐야 확인 가능'하다고 밝힘. 판단 기준 2번에 따라 반영하지 않음.",
+        "commit": null
+    },
+    {
+        "timestamp": "2026-11-23_0017",
+        "proposal": "trades 컬렉션(coin/side/timestamp)을 이용해 '손절 전 연속 추가매수 횟수'를 대시보드에 집계해 노출 (risk 리포트 구체적 제안 #2)",
+        "role": "risk",
+        "decision": "skipped",
+        "reason": "매매 로직은 건드리지 않는 순수 진단 지표라 판단 기준(저위험) 자체는 만족하지만, synthesizer가 이번 회차 Top 3에 포함하지 않았고 '코인+전략별 연속 매수 구간'을 정확히 경계짓는 집계 로직(어디서 구간이 끝나는지, SHORT/LONG 전환을 어떻게 다룰지)에 설계 검토가 더 필요하다고 판단해 이번 회차에는 보류한다. stop_loss_counts_by_coin/simultaneous_stop_events처럼 이미 비슷한 진단 지표들이 쌓여 있어 긴급성도 낮다. 다음 회차 이후 사람이 직접 집계 경계 기준을 검토해 추가하는 것을 권장.",
+        "commit": null
+    },
+    {
+        "timestamp": "2026-11-23_0017",
+        "proposal": "portfolios 테이블의 \"<전략>__reset\"/\"<전략>__cumulative\" 합성키를 복합 PK(strategy, variant)로 마이그레이션 (storage 리포트 발견점 #2)",
+        "role": "storage",
+        "decision": "skipped",
+        "reason": "리포트 자체가 '쓰기 시점 검증으로 조용한 오분류 위험은 이미 차단했고, 지금 데이터 마이그레이션 비용 대비 이득이 작다'고 결론 내렸으며, 4개 테이블(portfolios/trades/snapshots/slot_values)에 걸친 스키마 마이그레이션은 판단 기준 3번(운영 중단/기존 데이터 변환이 필요한 제안 제외)에 명시적으로 해당해 반영하지 않음.",
+        "commit": null
     }
 ]
