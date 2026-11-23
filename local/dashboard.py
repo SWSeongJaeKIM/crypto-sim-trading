@@ -926,7 +926,10 @@ def api_data():
         for coin in training_coins:
             trainings.extend(reversed(trainings_by_coin.get(coin, [])))  # 오래된 것 먼저
 
-        prediction_accuracy = storage.prediction_accuracy_by_coin(conn)
+        # training_coins를 재사용해 함수 내부의 "SELECT DISTINCT coin" 풀스캔을
+        # 건너뛴다 (analysis_team storage 리포트 2026-11-23_0017 발견점 #1,
+        # synthesizer Top3 #1).
+        prediction_accuracy = storage.prediction_accuracy_by_coin(conn, coins=training_coins)
         # 코인별 손절/강제청산 발생 횟수 — 변동성 큰 코인이 실제로 더 자주
         # 손절에 걸리는지 데이터로 확인하기 위한 참고용 집계. 트레이딩 로직은
         # 건드리지 않는다 (analysis_team risk 리포트 2026-11-22_0517 구체적

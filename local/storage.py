@@ -645,7 +645,8 @@ def prediction_accuracy(conn, coin: str | None = None, limit: int = 500) -> dict
             "accuracy": round(correct / total, 4) if total else None}
 
 
-def prediction_accuracy_by_coin(conn, limit_per_coin: int = 500, lookback_days: int = 14) -> list[dict]:
+def prediction_accuracy_by_coin(conn, limit_per_coin: int = 500, lookback_days: int = 14,
+                                 coins: list[str] | None = None) -> list[dict]:
     """코인별 적중률 요약(각 항목은 prediction_accuracy()와 동일한 형식:
     coin/total/correct/accuracy).
 
@@ -672,8 +673,17 @@ def prediction_accuracy_by_coin(conn, limit_per_coin: int = 500, lookback_days: 
     코인도 500건을 놓치지 않도록 함)을 추가로 걸어 인덱스
     idx_predictions_resolved_coin_time(resolved, coin, predicted_at DESC)가
     그 구간만 훑고 멈추게 한다. predicted_at은 ISO8601 UTC 문자열이라
-    문자열 비교로도 시간 순서가 맞는다(prune_predictions()와 동일한 방식)."""
-    coins = [r["coin"] for r in conn.execute("SELECT DISTINCT coin FROM predictions").fetchall()]
+    문자열 비교로도 시간 순서가 맞는다(prune_predictions()와 동일한 방식).
+
+    coins를 넘기면 "SELECT DISTINCT coin FROM predictions" 풀스캔(인덱스
+    스캔이긴 하지만 레코드 수에 비례해 비용이 커짐)을 건너뛰고 그 목록을
+    그대로 쓴다 — 호출부(dashboard.py)가 이미 들고 있는 코인 목록을 또
+    조회하는 중복을 없앤다(analysis_team storage 리포트 2026-11-23_0017
+    발견점 #1, synthesizer Top3 #1). coins가 None이면 기존처럼 DISTINCT로
+    조회해, "거래 유니버스에서는 빠졌지만 predictions에 잔여 데이터가 남은
+    과거 코인"도 누락 없이 집계되는 기존 동작을 그대로 유지한다."""
+    if coins is None:
+        coins = [r["coin"] for r in conn.execute("SELECT DISTINCT coin FROM predictions").fetchall()]
     if not coins:
         return []
     cutoff = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
