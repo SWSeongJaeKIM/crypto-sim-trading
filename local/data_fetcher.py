@@ -507,6 +507,34 @@ def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=Non
     last_full_refresh = _load_last_full_refresh()
     _forced_full_coins: list[str] = []
 
+    # force_full(전체 재수집) 트리거를 "오늘 날짜가 바뀌었는가" 단일 기준
+    # 대신 코인별로 하루씩 돌려가며 분산한다. 기존 방식은 6개 코인 모두
+    # 같은 "오늘" 경계를 쓰기 때문에, 자정이 지난 뒤 첫 재학습 슬롯에서
+    # 6개 코인이 동시에 force_full로 전환될 확률이 구조적으로 높았다 —
+    # 이 경우 공유 리미터(history_rate_limiter)로 사실상 직렬화돼 코인당
+    # 최대 ~648페이지(HISTORY_DAYS_FOR_TRAIN=90일 기준) × 6코인 ≈ 7~8분이
+    # 걸릴 수 있고, 이 동안 main_loop.py의 손절/강제청산 체크가 동기적으로
+    # 함께 멈춘다(위 docstring에 이미 인지된 트레이드오프). COINS 내
+    # 인덱스를 날짜 순번(toordinal)과 매칭해 "오늘이 그 코인의 지정
+    # force_full 요일"인 코인만 강제 재수집하면, 6개 코인의 전체 재수집이
+    # 하루에 몰리지 않고 6일에 걸쳐 분산된다(analysis_team execution 리포트
+    # 2026-11-23_0017 발견점 #1·구체적 제안, synthesizer Top3 #2). 단,
+    # 마커가 아예 없는 코인(최초 실행, 또는 마커 파일 손상 후 재생성)은
+    # 분산 일정과 무관하게 항상 강제 재수집해야 한다 — 그렇지 않으면 캐시가
+    # 없는 상태로 영영 증분 수집만 시도하게 된다.
+    today_ordinal = pd.Timestamp.now().date().toordinal()
+    _coins_due_today = {
+        coin for i, coin in enumerate(COINS)
+        if coin not in last_full_refresh or today_ordinal % len(COINS) == i
+    }
+    if _coins_due_today:
+        # 재수집이 시작되기 전에 미리 남겨, 재학습이 오래 걸리는 중에도
+        # "오늘은 이 코인(들) 때문에 느릴 예정"이라는 사전 신호를 run.log에서
+        # 바로 확인할 수 있게 한다 (analysis_team execution 리포트
+        # 2026-11-23_0017 구체적 제안 #2, synthesizer Top3 #2).
+        log.info(f"오늘 force_full(전체 재수집) 예정 코인: {sorted(_coins_due_today)} "
+                 f"— 해당 코인 수집은 평소보다 느릴 수 있음")
+
     def _fetch_one(coin: str, i: int) -> tuple[str, pd.DataFrame | None, bool]:
         if on_progress:
             with print_lock:
@@ -541,7 +569,7 @@ def fetch_all_minute_history(days: int = 14, cache: bool = True, on_progress=Non
                             log.warning(f"[{_coin}] on_progress 콜백 실패(무시하고 계속 진행): {e}")
 
         cache_path = DATA_DIR / f"{coin}_1m_{days}d.csv"
-        force_full = last_full_refresh.get(coin) != today_str
+        force_full = coin in _coins_due_today and last_full_refresh.get(coin) != today_str
         cached_df: pd.DataFrame | None = None
         min_time = None
         if not force_full and cache and cache_path.exists():
