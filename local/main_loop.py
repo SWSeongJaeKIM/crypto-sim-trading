@@ -544,6 +544,12 @@ def run_one_cycle(conn) -> float | None:
     # 보고 "신호가 없어서 거래가 없었는지"와 "거래가 있었는데 로그에 안 보였는지"를
     # 구분할 수 없던 공백을 메운다. 매매 로직에는 영향 없는 순수 집계용 카운터.
     _trades_this_cycle = 0
+    # 전략__모드(portfolio_key) 단위로 이번 사이클 거래 건수를 세분화한다
+    # (analysis_team execution 리포트 2026-11-23_0418 발견점 #3, synthesizer
+    # Top3 #3) — 위 _trades_this_cycle(전체 합계)만으로는 특정 전략·모드 하나가
+    # 계속 0건이어도 다른 전략의 거래에 가려져 run.log만으로 알아채기 어려웠다.
+    # 매매 로직에는 영향 없는 순수 집계용 카운터.
+    _trades_by_key: dict[str, int] = {}
 
     for strat_name in STRATEGY_NAMES:
         # 전략 하나당 try/except로 격리한다. run_one_cycle() 전체가
@@ -692,6 +698,8 @@ def run_one_cycle(conn) -> float | None:
                     _trades = pf.new_trades_as_dicts()
                     storage.add_trades(conn, key, _trades)
                     _trades_this_cycle += len(_trades)
+                    if _trades:
+                        _trades_by_key[key] = _trades_by_key.get(key, 0) + len(_trades)
                     storage.add_snapshot(conn, key, now, total_value, pnl_pct)
                     # 코인별 자금 쏠림(slot) 시계열 — cumulative 모드에서 반복
                     # 손절로 생기는 코인 간 드리프트를 사후 분석할 수 있게 한다.
@@ -723,7 +731,9 @@ def run_one_cycle(conn) -> float | None:
     except Exception as e:
         log.exception(f"상태 메타(status) 갱신 중 에러, 이번 사이클은 스킵 (다음 사이클에 재시도, "
                        f"이미 처리된 전략들의 매매 기록에는 영향 없음): {e}")
-    log.info(f"사이클 완료 @ {now} | 가격 샘플 BTC={prices_krw.get('BTC')} | 거래 {_trades_this_cycle}건")
+    _trades_breakdown = ", ".join(f"{k}:{v}" for k, v in _trades_by_key.items())
+    _trades_suffix = f" ({_trades_breakdown})" if _trades_breakdown else ""
+    log.info(f"사이클 완료 @ {now} | 가격 샘플 BTC={prices_krw.get('BTC')} | 거래 {_trades_this_cycle}건{_trades_suffix}")
     # 정상 완료 시 progress.stage를 "cycle_running"에 멈춰두지 않고 "idle"로
     # 되돌린다 — 그동안은 다음 사이클 시작(위 379행 "collecting")까지 약 55초+
     # 동안 대시보드가 실제로는 대기 중인데도 "신호 계산/매매 중"으로 표시됐다
