@@ -78,6 +78,16 @@ _REPEATED_EXCEPTION_LOG_INTERVAL_SEC = 3600  # 1시간마다 전체 트레이스
 # 락으로 저렴하게 막는다.
 _warned_repeated_exception_lock = threading.Lock()
 
+# fetch_latest_minute_candles()의 count>200 클램프 경고(아래 참고)는 이 파일/
+# main_loop.py 전체가 일관되게 쓰는 "반복 경고는 1시간에 1회만" 쓰로틀 패턴에서
+# 유일하게 빠져 있었다. 지금은 main_loop.py가 count=max(SEQ_LEN+5, 200)=200으로
+# 호출해 발동하지 않지만, SEQ_LEN이 195를 넘는 순간부터는 60초 사이클마다(하루
+# 최대 1440회) 영원히 반복돼 run.log를 폭주시킬 수 있다 (analysis_team execution
+# 리포트 2026-11-23_0318 발견점 #1, synthesizer Top3 #1). 마켓별로 1시간에 1회만
+# 남기도록 같은 쓰로틀 dict + 락 패턴을 재사용한다.
+_warned_count_clamp: dict[str, float] = {}
+_warned_count_clamp_lock = threading.Lock()
+
 
 def _log_fetch_exception(log_prefix: str, coin: str, e: Exception) -> None:
     """실패마다 log.exception(전체 스택트레이스)을 남기는 대신, 같은
@@ -244,7 +254,23 @@ def fetch_latest_minute_candles(market: str, count: int = 200,
         # 2026-11-22_2018, synthesizer Top3 #1). WARNING으로 올려 가시성을 확보한다.
         # 참고: 이 메시지는 장애가 아니라 클램프가 설계대로 안전하게 동작 중인
         # 정상 방어 동작이다.
-        log.warning(f"{market} count={count}가 Upbit 단일 요청 상한(200)을 초과해 200으로 조정 (정상 방어 동작, 참고용)")
+        #
+        # 이 경고 자체는 다른 반복 경고들과 달리 쓰로틀이 없었다 (analysis_team
+        # execution 리포트 2026-11-23_0318 발견점 #1) — SEQ_LEN이 커져 이 클램프가
+        # 상시 발동하게 되면 60초마다 영원히 반복 적재될 수 있으므로, 마켓별로
+        # 1시간에 1회만 WARNING을 남기고 그 사이엔 완전히 생략한다(이미 최초
+        # 1회로 진단 목적은 충분하고, 장애가 아니라 정상 방어 동작이라 침묵해도
+        # 운영자가 놓치는 정보는 없다).
+        now_mono = time.monotonic()
+        with _warned_count_clamp_lock:
+            last_warned = _warned_count_clamp.get(market)
+            should_warn = (
+                last_warned is None or (now_mono - last_warned) >= _REPEATED_EXCEPTION_LOG_INTERVAL_SEC
+            )
+            if should_warn:
+                _warned_count_clamp[market] = now_mono
+        if should_warn:
+            log.warning(f"{market} count={count}가 Upbit 단일 요청 상한(200)을 초과해 200으로 조정 (정상 방어 동작, 참고용)")
         count = 200
     url = f"{UPBIT_BASE}/v1/candles/minutes/1?market={market}&count={count}"
     raw = _http_get_json(url, timeout=timeout, retries=retries)
