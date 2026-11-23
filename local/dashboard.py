@@ -393,7 +393,7 @@ function renderCards(containerId, mode) {
         <div class="${cls}">${p.pnl_pct >= 0 ? '+' : ''}${p.pnl_pct.toFixed(2)}%</div>
         <div class="${cls}" style="font-size:14px;margin-top:2px;">${pnlSign}${Math.round(p.pnl_krw).toLocaleString()}원</div>
         <div style="color:#9aa0a6;font-size:12px;margin-top:4px;">평가액 ${Math.round(p.total_value_krw).toLocaleString()}원 (원금 ${Math.round(p.initial_capital_krw).toLocaleString()}원) · 거래 ${p.trade_count}건</div>
-        <div style="color:#9aa0a6;font-size:11px;margin-top:2px;">최대낙폭(MDD) -${(p.max_drawdown_pct || 0).toFixed(2)}%</div>
+        <div style="color:#9aa0a6;font-size:11px;margin-top:2px;">최대낙폭(MDD) -${(p.max_drawdown_pct || 0).toFixed(2)}% · Calmar ${(p.calmar_ratio || 0).toFixed(2)}</div>
         <div style="color:#9aa0a6;font-size:11px;margin-top:2px;">누적 수수료 ${Math.round(p.total_fees_krw || 0).toLocaleString()}원</div>
         ${resetNote}
         <div style="display:${isOpen ? 'block' : 'none'};">${renderPositionDetail(p.slots || [])}</div>
@@ -906,6 +906,14 @@ def api_data():
                 # (analysis_team risk 리포트 2026-11-22_0918, synthesizer
                 # Top3 #2 — portfolio.py의 peak_value_krw/max_drawdown_pct).
                 "max_drawdown_pct": pf.max_drawdown_pct,
+                # pnl_pct만으로 로스터를 비교하면 "변동성이 커서 우연히 수익률이
+                # 높아 보이는" 전략이 좋아 보일 수 있다. max_drawdown_pct를 같이
+                # 보여줘도 두 숫자를 머릿속으로 조합해야 해서, 리스크 대비 수익을
+                # 한 숫자로 보여줄 지표(Calmar 비율류)가 없었다(analysis_team
+                # risk 리포트 2026-11-23_0318 발견점 #4, synthesizer Top3 #3).
+                # MDD가 거의 0인 초기 구간(0으로 나누기 방지)에는 분모를 1.0으로
+                # 바닥을 둔다 — 순수 표시용 지표라 거래 로직/배분에는 영향 없음.
+                "calmar_ratio": pnl / max(pf.max_drawdown_pct, 1.0),
                 # 장기 성과 저하가 "신호 품질 문제"인지 "수수료 누적 문제"인지
                 # 구분할 지표가 없었다(analysis_team risk 리포트 2026-11-23_0117
                 # 발견점 #4, synthesizer Top3 #2 — portfolio.py의
