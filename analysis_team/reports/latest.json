@@ -1,47 +1,47 @@
 {
-  "generated_at": "2026-11-23_0418",
+  "generated_at": "2026-11-23_0523",
   "roles": {
     "execution": {
       "role": "execution",
       "role_label": "실행/버그 분석가",
-      "timestamp": "2026-11-23_0418",
-      "path": "analysis_team/reports/2026-11-23_0418_execution.md",
-      "summary": "main_loop.py/data_fetcher.py는 이미 다수의 이전 분석 라운드를 거쳐 예외 격리·재시도·쓰로틀링·사이클 드리프트 보정이 상당히 촘촘하게 구현돼 있어 치명적 결함은 보이지 않고, 남은 지점은 \"코인 단위 재학습 백오프 부재\"와 \"거래 집계 로그의 세분화 부족\" 정도다"
+      "timestamp": "2026-11-23_0523",
+      "path": "analysis_team/reports/2026-11-23_0523_execution.md",
+      "summary": "main_loop.py / data_fetcher.py 모두 예외처리·API 호출 패턴·사이클 타이밍·로깅이 이미 매우 꼼꼼하게 다듬어져 있고(주석에 과거 analysis_team 리포트들이 날짜별로 상세히 남아있어 거의 모든 엣지케이스가 이미 식별·수정된 상태), 새로 지적할 만한 치"
     },
     "lstm": {
       "role": "lstm",
       "role_label": "LSTM 분석가",
-      "timestamp": "2026-11-23_0418",
-      "path": "analysis_team/reports/2026-11-23_0418_lstm.md",
-      "summary": "파인튜닝 안전장치(롤백, confident-accuracy 비교, finetune_chain_length 리셋)와 재학습 주기/기간 설계는 이미 여러 차례 다듬어져 1분봉 예측 과제에 잘 맞게 세팅되어 있고, 가장 남은 개선 여지는 FEATURE_COLS의 정보량 부족 쪽이다."
+      "timestamp": "2026-11-23_0523",
+      "path": "analysis_team/reports/2026-11-23_0523_lstm.md",
+      "summary": "피처/모델 구조와 파인튠 안전장치는 이미 여러 차례 리뷰를 거쳐 상당히 잘 다져져 있고, 남은 개선 여지는 \"코인별 변동성 차이를 반영하지 않는 전역 라벨링 임계값\"과 \"알트코인에 BTC 동조화 신호가 피처로 안 들어감\" 두 가지로 좁혀진다."
     },
     "risk": {
       "role": "risk",
       "role_label": "리스크 분석가",
-      "timestamp": "2026-11-23_0418",
-      "path": "analysis_team/reports/2026-11-23_0418_risk.md",
-      "summary": "개별 포지션 수준의 \"물타기\"형 손절선 밀림, 레버리지 비대칭, drawdown/수수료 지표 부재 등 주요 리스크는 이미 이전 분석팀 리포트들을 통해 상당수 반영되어 있고(진입가 고정, peak/MDD, total_fees_krw 추가 등) 구조가 견실해졌다. 다만 **TRADE_FRA"
+      "timestamp": "2026-11-23_0523",
+      "path": "analysis_team/reports/2026-11-23_0523_risk.md",
+      "summary": "리스크 관리의 핵심 장치(손절 기준을 최초 진입가로 고정, 레버리지 환산, drawdown/수수료 집계, 코인별 평가금액 분리)는 이미 과거 분석 리포트를 거쳐 상당히 잘 보완된 상태이며, 매매 비중(0.1~0.9)과 6코인 균등배분 구조도 과도한 집중 리스크를 만들지는 않는다. 남은 "
     },
     "storage": {
       "role": "storage",
       "role_label": "데이터/저장소 분석가",
-      "timestamp": "2026-11-23_0418",
-      "path": "analysis_team/reports/2026-11-23_0418_storage.md",
-      "summary": "`storage.py`는 이전 여러 차례의 분석팀 리뷰를 거치며 인덱스·보관주기·동시성 문제를 이미 체계적으로 해결한 상태이며, 이번 검토에서 새로 심각한 문제는 발견되지 않았다."
+      "timestamp": "2026-11-23_0523",
+      "path": "analysis_team/reports/2026-11-23_0523_storage.md",
+      "summary": "전체적으로 이미 수차례(2026-11-16~23) 반복 리뷰·개선을 거쳐 WAL/재시도/인덱스/보관주기/읽기정합성까지 꼼꼼히 다져진 상태이며, 새로 발견된 치명적 문제는 없음. 다만 `stop_loss_counts_by_coin`/`simultaneous_stop_events`의 성능 "
     },
     "strategy": {
       "role": "strategy",
       "role_label": "전략 분석가",
-      "timestamp": "2026-11-23_0418",
-      "path": "analysis_team/reports/2026-11-23_0418_strategy.md",
-      "summary": "4개 전략의 진입/청산 로직 자체는 각각 논리적으로 타당하지만, 거래량 미사용·일봉형 파라미터·`ma_cross_rsi`와 `macd_momentum`의 구조적 중복·`bollinger_rsi`만 레벨유지형 신호라는 점은 이전 리포트(2026-11-22_1922, 2026-11-23_0"
+      "timestamp": "2026-11-23_0523",
+      "path": "analysis_team/reports/2026-11-23_0523_strategy.md",
+      "summary": "RSI 필터가 급락 시 정작 필요한 매도(청산) 신호를 막을 수 있는 구조적 리스크가 가장 눈에 띄며, 거래량 컬럼이 네 전략 모두에서 전혀 쓰이지 않는 점도 저유동성 구간에서의 노이즈 신호 위험으로 이어진다."
     },
     "synthesizer": {
       "role": "synthesizer",
       "role_label": "종합 조정자",
-      "timestamp": "2026-11-23_0418",
-      "path": "analysis_team/reports/2026-11-23_0418_synthesizer.md",
-      "summary": "1. **MAX_TRADE_FRACTION 하향 조정** (risk, main_loop.py 42행)"
+      "timestamp": "2026-11-23_0523",
+      "path": "analysis_team/reports/2026-11-23_0523_synthesizer.md",
+      "summary": "**1. `ma_cross_rsi`의 RSI 필터가 급락 시 청산(SELL)을 막는 구조 수정** (전략 분석가, `strategies.py` 155-176줄)"
     }
   }
 }
