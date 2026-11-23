@@ -1,47 +1,47 @@
 {
-  "generated_at": "2026-11-23_0017",
+  "generated_at": "2026-11-23_0117",
   "roles": {
     "execution": {
       "role": "execution",
       "role_label": "실행/버그 분석가",
-      "timestamp": "2026-11-23_0017",
-      "path": "analysis_team/reports/2026-11-23_0017_execution.md",
-      "summary": "예외처리·재시도·사이클 드리프트 보정·로깅 모두 이미 여러 차례(2026-11-16~11-23) 분석팀 피드백을 반영해 성숙한 상태이며, 이번 점검에서 사이클을 죽이거나 거래 로직을 왜곡하는 새로운 치명적 버그는 발견되지 않았다. 구조적으로 이미 인지/수용된 트레이드오프 1건에 대해서만"
+      "timestamp": "2026-11-23_0117",
+      "path": "analysis_team/reports/2026-11-23_0117_execution.md",
+      "summary": "전반적으로 예외처리·페이지네이션·사이클 드리프트 보정·로깅 쓰로틀링이 매우 치밀하게 되어 있으나, `retrain_lstm()`의 코인별 학습결과 DB 저장(`storage.add_model_training`) 호출만 유일하게 try/except 보호가 빠져 있어, 이 지점의 예외 하나"
     },
     "lstm": {
       "role": "lstm",
       "role_label": "LSTM 분석가",
-      "timestamp": "2026-11-23_0017",
-      "path": "analysis_team/reports/2026-11-23_0017_lstm.md",
-      "summary": "모델 구조(SEQ_LEN, LSTMClassifier)와 과적합 방지 장치는 데이터 규모 대비 적절하게 설계돼 있고, 가장 구체적으로 손볼 만한 지점은 파인튜닝 학습률 전략이 \"과거 패턴 망각 방지\"에만 치우쳐 있어 \"최근 패턴 반영\"이라는 원래 목적은 사실상 거의 못 채우고 있다는 점"
+      "timestamp": "2026-11-23_0117",
+      "path": "analysis_team/reports/2026-11-23_0117_lstm.md",
+      "summary": "SEQ_LEN/모델 구조와 파인튠 롤백 안전장치는 현재 데이터 규모·과제 난이도(val_acc 54~62%)에 비춰 적절하게 설계되어 있으나, 재학습 시 매번 90일 전체를 다시 학습하는 구조, 코인별 변동성을 무시한 고정 NEUTRAL_BAND, 변동성 레짐을 직접 나타내는 피처의 부"
     },
     "risk": {
       "role": "risk",
       "role_label": "리스크 분석가",
-      "timestamp": "2026-11-23_0017",
-      "path": "analysis_team/reports/2026-11-23_0017_risk.md",
-      "summary": "코인별 자금격리 + 최초진입가 고정 손절 구조 덕분에 \"과도한 집중\"과 \"손절선이 밀리는 물타기\" 문제는 이미 상당 부분 해결되어 있고, 남은 리스크는 \"동일 KRW배분이 코인 간 변동성 차이를 반영하지 않는 점\"과 \"손절 도달 전 반복 추가매수로 노출이 다소 커질 수 있는 구조적 여지"
+      "timestamp": "2026-11-23_0117",
+      "path": "analysis_team/reports/2026-11-23_0117_risk.md",
+      "summary": "물타기형 손실 확대 리스크와 매매 비중(50%) 집중 리스크는 이미 구조적으로 잘 제어되어 있고, 남은 보완 지점은 \"코인별 변동성 차이가 만드는 손절 빈도 격차\"와 \"수수료 누적이 장기 성과에 미치는 영향\"을 드러내는 지표 부족이다."
     },
     "storage": {
       "role": "storage",
       "role_label": "데이터/저장소 분석가",
-      "timestamp": "2026-11-23_0017",
-      "path": "analysis_team/reports/2026-11-23_0017_storage.md",
-      "summary": "스키마/인덱스, append-only 테이블 보관주기, 동시성(WAL+재시도)은 이전 분석 사이클들을 거치며 이미 상당히 성숙한 상태이고, 이번 회차에서 남은 실질적 개선점은 `prediction_accuracy_by_coin()`의 코인 목록 조회 1곳 정도다."
+      "timestamp": "2026-11-23_0117",
+      "path": "analysis_team/reports/2026-11-23_0117_storage.md",
+      "summary": "스키마·인덱스·보관주기·동시성 설계는 이미 여러 회차에 걸쳐 거의 완성 단계이고(직접 벤치마크로 재검증해 추가 결함 없음을 확인), 이번 회차에서는 \"대시보드가 한 응답 안에서 여러 테이블을 묶어 읽을 때 트랜잭션이 없어 시점이 섞일 수 있는 점\"과 \"보관주기(prune)가 DELETE"
     },
     "strategy": {
       "role": "strategy",
       "role_label": "전략 분석가",
-      "timestamp": "2026-11-23_0017",
-      "path": "analysis_team/reports/2026-11-23_0017_strategy.md",
-      "summary": "진입/청산 로직 자체는 각각 타당하지만, ma_cross_rsi와 macd_momentum이 거의 같은 창(26봉 장기선)을 공유해 중복 신호를 낼 가능성이 높고, 전 전략이 volume을 전혀 쓰지 않아 저유동성 구간 방어막이 없다."
+      "timestamp": "2026-11-23_0117",
+      "path": "analysis_team/reports/2026-11-23_0117_strategy.md",
+      "summary": "4개 전략의 진입/청산 로직 자체는 교과서적으로 타당하지만, ma_cross_rsi와 macd_momentum이 거의 같은 \"26분 이동평균\"을 장기 기준으로 공유해 신호 상관성이 높고, trend_follow의 추세 판정 버퍼가 변동성과 무관한 고정 비율이라 극단 시세에서 민감도가 상"
     },
     "synthesizer": {
       "role": "synthesizer",
       "role_label": "종합 조정자",
-      "timestamp": "2026-11-23_0017",
-      "path": "analysis_team/reports/2026-11-23_0017_synthesizer.md",
-      "summary": "**1. storage: `prediction_accuracy_by_coin()` 불필요한 전체 스캔 제거** (`storage.py:648` 근처, 호출부 `dashboard.py:929`)"
+      "timestamp": "2026-11-23_0117",
+      "path": "analysis_team/reports/2026-11-23_0117_synthesizer.md",
+      "summary": "**1. `retrain_lstm()` 저장 블록 try/except 추가 (execution)** — `main_loop.py` 745~762행의 `storage.add_model_training()` 호출에 예외처리가 없어, 일시적 DB 오류 하나가 전체 재학습 사이클을 깨뜨리고 `"
     }
   }
 }
