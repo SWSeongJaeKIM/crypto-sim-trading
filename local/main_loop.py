@@ -207,6 +207,21 @@ _warned_insufficient_bars: set[tuple[str, str]] = set()
 _in_retrain = False
 
 
+# LSTM 재학습이 (모든 코인 학습 실패, 또는 retrain_lstm() 자체의 예외로) 이번
+# 슬롯을 "완료"로 기록하지 못하면 last_retrain_at이 갱신되지 않아,
+# retrain_is_due()가 다음 사이클(60초 후)에도 계속 True를 반환한다. 원인
+# (네트워크 장애, 디스크 쓰기 실패, 모델 저장 권한 문제 등)이 금방 해소되지
+# 않으면 매분 90일×6코인 재수집+학습을 무제한 반복 시도하면서 그 동기 구간
+# 동안 매매 사이클(신호 계산, 손절/강제청산 체크)까지 계속 멈춰 세우는
+# 구조적 결함이 있었다 (analysis_team execution 리포트 2026-11-15_2217에서
+# 처음 지적, 2026-11-23_0219에서 재지적 — 그동안 미해결). 전면 실패/예외가
+# 발생하면 이 시각까지는 retrain_is_due()가 True여도 재시도하지 않고 정상
+# 매매 사이클만 돈다. 진짜 일시적 장애라면 최대 _RETRAIN_FAILURE_BACKOFF만큼
+# 재학습이 늦어질 뿐이고, 하루 10슬롯(2시간24분 간격) 체계상 영향은 제한적이다.
+_retrain_backoff_until: datetime | None = None
+_RETRAIN_FAILURE_BACKOFF = timedelta(minutes=15)
+
+
 def _handle_sigint(signum, frame):
     global _stop
     if _in_retrain:
@@ -825,7 +840,7 @@ def main():
     missing_models = [c for c in COINS if not (lstm_model.MODEL_DIR / f"{c}_lstm.pt").exists()]
     if missing_models:
         log.info(f"저장된 LSTM 모델이 없는 코인: {missing_models} — 최초 학습을 먼저 수행합니다 (몇 분 걸릴 수 있음)...")
-        global _in_retrain
+        global _in_retrain, _retrain_backoff_until
         _in_retrain = True
         try:
             retrain_lstm()  # 이 안에서 last_lstm_train 메타를 저장함 (내부에서 짧게 connect)
@@ -904,7 +919,9 @@ def main():
         # 위험은 낮다 (analysis_team execution 리포트 2026-11-22_0318, synthesizer
         # Top3 #3).
         _prune_attempted_this_iteration = False
-        if retrain_is_due(last_retrain_at):
+        if retrain_is_due(last_retrain_at) and (
+            _retrain_backoff_until is None or now_local >= _retrain_backoff_until
+        ):
             _retrain_attempted_this_iteration = True
             # 재학습 동안 run_one_cycle()이 동기적으로 멈추는 공백 구간의 실제 길이를
             # run.log에서 가늠할 수 있도록 소요 시간을 기록한다.
@@ -929,10 +946,21 @@ def main():
                 any_trained = retrain_lstm()  # 내부에서 단계별로 짧게 connect — 재학습 도는 동안 DB를 안 잡음
                 if any_trained:
                     last_retrain_at = now_local
+                    _retrain_backoff_until = None
                 else:
-                    log.warning("이번 재학습 슬롯 전체 실패 — last_retrain_at을 갱신하지 않아 다음 사이클에 재시도합니다.")
+                    _retrain_backoff_until = datetime.now() + _RETRAIN_FAILURE_BACKOFF
+                    log.warning(
+                        "이번 재학습 슬롯 전체 실패 — last_retrain_at을 갱신하지 않지만, "
+                        f"{_retrain_backoff_until.strftime('%H:%M:%S')}까지는 재시도하지 않고 "
+                        "매매 사이클만 정상 진행합니다 (무한 재시도로 사이클이 멈추는 것을 방지)."
+                    )
             except Exception as e:
-                log.exception(f"LSTM 재학습 중 에러: {e}")
+                _retrain_backoff_until = datetime.now() + _RETRAIN_FAILURE_BACKOFF
+                log.exception(
+                    f"LSTM 재학습 중 에러: {e} — "
+                    f"{_retrain_backoff_until.strftime('%H:%M:%S')}까지는 재시도하지 않고 "
+                    "매매 사이클만 정상 진행합니다."
+                )
             finally:
                 _in_retrain = False
                 log.info(f"LSTM 재학습 소요 시간: {time.monotonic() - _retrain_started:.1f}초 "
