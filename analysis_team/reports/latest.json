@@ -1,47 +1,47 @@
 {
-  "generated_at": "2026-11-23_0219",
+  "generated_at": "2026-11-23_0318",
   "roles": {
     "execution": {
       "role": "execution",
       "role_label": "실행/버그 분석가",
-      "timestamp": "2026-11-23_0219",
-      "path": "analysis_team/reports/2026-11-23_0219_execution.md",
-      "summary": "예외처리·API 호출 패턴·로깅은 이미 수십 차례 리뷰를 거쳐 매우 견고하게 다져져 있고(코인/전략별 격리, 공유 레이트리미터, 증분 캐싱, 지연 데이터 감지, 60초 주기 드리프트 보정 등 모두 구현됨), 유일하게 남아있는 실질적 문제는 LSTM 재학습이 전면 실패를 반복할 때 매 사"
+      "timestamp": "2026-11-23_0318",
+      "path": "analysis_team/reports/2026-11-23_0318_execution.md",
+      "summary": "예외처리·API 호출 패턴·사이클 타이밍·로깅 네 영역 모두 기존에 이미 매우 꼼꼼하게 다져져 있고(과거 analysis_team 리포트들이 지적한 문제 대부분이 코드에 반영됨), 남은 문제는 \"코드가 안 죽는가\"보다는 \"특정 드문 상황에서 로그가 폭주하거나 자원을 반복 낭비할 수 있는"
     },
     "lstm": {
       "role": "lstm",
       "role_label": "LSTM 분석가",
-      "timestamp": "2026-11-23_0219",
-      "path": "analysis_team/reports/2026-11-23_0219_lstm.md",
-      "summary": "피처·학습 로직은 과거 analysis_team 리포트를 거치며 이미 여러 번 다듬어진 성숙한 상태이고, 억지로 흠을 잡을 필요는 없다. 다만 \"호가 스프레드/코인간 상관관계\" 피처 부재와 재학습 주기 관련 전제가 실제 코드(10회/일, 90일)와 다르다는 점은 짚을 필요가 있다."
+      "timestamp": "2026-11-23_0318",
+      "path": "analysis_team/reports/2026-11-23_0318_lstm.md",
+      "summary": "핵심 안전장치(확신구간 롤백, 시퀀스-라벨 정렬, 파인튠 lr 저감)는 이미 잘 갖춰져 있고, 남은 개선 여지는 \"라벨/피처가 실제 거래비용·시장 전체 맥락을 충분히 반영하는가\"에 있다."
     },
     "risk": {
       "role": "risk",
       "role_label": "리스크 분석가",
-      "timestamp": "2026-11-23_0219",
-      "path": "analysis_team/reports/2026-11-23_0219_risk.md",
-      "summary": "포지션 크기·물타기 리스크는 이미 상당 부분 코드로 보완되어 있으나(`first_entry_price_krw` 고정, `max_drawdown_pct`/`total_fees_krw` 추적), \"손실 중에도 매매를 계속 키울 수 있는 구조\"와 \"코인 간 변동성 차이를 반영하지 않는 균등배"
+      "timestamp": "2026-11-23_0318",
+      "path": "analysis_team/reports/2026-11-23_0318_risk.md",
+      "summary": "TRADE_FRACTION은 실제로는 고정 50%가 아니라 확신도 기반 10~90% 슬롯 내 베팅이라 집중 리스크는 이미 완화돼 있고, 물타기형 손절 지연도 이미 수정돼 있다. 다만 \"코인 6개 균등 배분 + 전 코인 동일 8% 손절선\"은 변동성이 다른 코인 간 리스크를 불균등하게 분산"
     },
     "storage": {
       "role": "storage",
       "role_label": "데이터/저장소 분석가",
-      "timestamp": "2026-11-23_0219",
-      "path": "analysis_team/reports/2026-11-23_0219_storage.md",
-      "summary": "스키마/인덱스/보관주기/동시성 설계는 이미 반복적으로 다듬어져 있어 전반적으로 양호하며, 남은 핵심 리스크는 \"한 사이클=한 트랜잭션\" 구조에서 전략 내부 일부 쓰기만 실패할 때 생기는 부분 커밋 가능성과, `portfolios`의 합성키 설계가 여전히 TODO로 남아있다는 점이다."
+      "timestamp": "2026-11-23_0318",
+      "path": "analysis_team/reports/2026-11-23_0318_storage.md",
+      "summary": "스키마/인덱스/보관주기/동시성 설계 모두 이미 여러 차례 분석·개선을 거쳐 쿼리 패턴에 맞게 잘 짜여 있고, 실제로 main_loop.py에 prune 함수들이 매일 호출되도록 연결되어 있어 \"제안만 하고 코드엔 없는\" 상태가 아님을 확인했다. 남은 것은 극단적 엣지케이스와 디스크 회수"
     },
     "strategy": {
       "role": "strategy",
       "role_label": "전략 분석가",
-      "timestamp": "2026-11-23_0219",
-      "path": "analysis_team/reports/2026-11-23_0219_strategy.md",
-      "summary": "4개 조건식 모두 교과서용 일봉 기본 파라미터를 그대로 쓰고 있고(이미 코드 주석에 인지됨), 거래량을 전혀 쓰지 않으며, 4개 중 3개가 본질적으로 같은 \"이동평균 추세추종\" 계열이라 상관관계가 높다."
+      "timestamp": "2026-11-23_0318",
+      "path": "analysis_team/reports/2026-11-23_0318_strategy.md",
+      "summary": "4개 전략의 진입/청산 로직 자체는 논리적으로 타당하지만, (1) ma_cross_rsi·macd_momentum이 구조적으로 거의 동일한 \"이동평균 차이 크로스\" 신호라 상관관계가 높고, (2) 4개 전략 모두 OHLCV 중 volume 컬럼을 전혀 사용하지 않아 거래량 바닥 구간을 "
     },
     "synthesizer": {
       "role": "synthesizer",
       "role_label": "종합 조정자",
-      "timestamp": "2026-11-23_0219",
-      "path": "analysis_team/reports/2026-11-23_0219_synthesizer.md",
-      "summary": "**1. LSTM 재학습 무한반복 백오프 추가 (execution, 중복 2회 지적)**"
+      "timestamp": "2026-11-23_0318",
+      "path": "analysis_team/reports/2026-11-23_0318_synthesizer.md",
+      "summary": "**1. 저위험 운영 안전장치 2건 동시 적용 (execution #1 + storage #1)**"
     }
   }
 }
